@@ -322,6 +322,33 @@ enum PiperTTS {
         }
     }
 
+    // MARK: - Leitura de filho sem travar
+
+    /// Lê o que já há no pipe sem bloquear: `availableData` trava até 1 byte
+    /// ou EOF, então só é chamado quando o `poll` indica dado ou HUP. Sem
+    /// nada para ler, devolve vazio e o chamador reavalia o prazo — processo
+    /// vivo e mudo nunca prende a thread (mesmo estreitamento do `EdgeTTS.run`).
+    static func readAvailable(_ fh: FileHandle) -> Data {
+        var pfd = pollfd(fd: fh.fileDescriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
+        guard poll(&pfd, 1, 0) > 0, (pfd.revents & Int16(POLLIN | POLLHUP)) != 0 else {
+            return Data()
+        }
+        return fh.availableData
+    }
+
+    /// Encerra um filho pendurado: SIGTERM, espera 2s, depois SIGKILL.
+    static func killHung(_ proc: Process) {
+        if proc.isRunning { proc.terminate() }
+        let limite = Date().addingTimeInterval(2)
+        while proc.isRunning, Date() < limite {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if proc.isRunning {
+            kill(proc.processIdentifier, SIGKILL)
+            proc.waitUntilExit()
+        }
+    }
+
     // MARK: - Sessão persistente (processo filho, morre com a leitura)
 
     private static let sessionLock = NSLock()
@@ -379,7 +406,7 @@ enum PiperTTS {
             var resto = Data()
             var pronto = false
             while Date() < limite, !pronto {
-                let pedaço = stdout.availableData
+                let pedaço = PiperTTS.readAvailable(stdout)
                 if pedaço.isEmpty {
                     if !proc.isRunning { break }
                     Thread.sleep(forTimeInterval: 0.1)
@@ -393,7 +420,7 @@ enum PiperTTS {
                 }
             }
             guard pronto else {
-                proc.terminate()
+                PiperTTS.killHung(proc)
                 throw makeError("A voz offline não respondeu ao carregar. Tente de novo.")
             }
         }
@@ -416,7 +443,7 @@ enum PiperTTS {
             let deadline = Date().addingTimeInterval(300)
             var acumulada = Data()
             while Date() < deadline {
-                let pedaço = stdout.availableData
+                let pedaço = PiperTTS.readAvailable(stdout)
                 if pedaço.isEmpty {
                     if !process.isRunning { break }
                     Thread.sleep(forTimeInterval: 0.05)
@@ -435,6 +462,7 @@ enum PiperTTS {
                     return (obj["duration"] as? Double) ?? 0
                 }
             }
+            PiperTTS.killHung(process)
             throw makeError("A voz offline não respondeu a tempo e foi encerrada.")
         }
 
