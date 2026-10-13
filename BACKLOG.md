@@ -34,6 +34,19 @@ Repo público com histórico desde `0aa5658`.
   página; 2 falsos positivos contidos (marca d'água EBSCO, tabela de
   cabeçalhos); suíte 115 testes/13 suítes. Os "0 corpos" antigos eram a
   régua perdida, não ausência no arquivo.
+- [CÓDIGO] Hífen de fim de linha com dicionário do sistema (`_junta_fim`:
+  quebra some, composto mantém o hífen) + junção na virada de página +
+  elisão curta; caixa do junto fica na página anterior (união entre
+  páginas corrompia a ordem no Swift). Commit `f959d82` + correção da
+  caixa neste commit.
+- [CÓDIGO] Anúncio da nota pelo pipeline (`Phrase.notaMarcador`, do
+  `resolveFootnotes` ao `forSpeech` nos 3 motores): anuncia mesmo quando
+  o dígito vem em forma que a regex cala. Medido: 11/12 anunciadas no
+  modo filtrado, voz inglesa. Neste commit.
+- [ABERTO] Nota 4 no modo filtrado: o `clean`/`reflow` come o trecho
+  inteiro do marcador na p9 ("witness would…stand or fall together" some
+  da lista filtrada; na integral o marcador liga as 5 frases). Rastro
+  pronto, correção pendente.
 - [MEDIDO] No artigo de teste: 12 marcadores distintos (1–12), 12
   ocorrências — todos anunciados; 0 corpos no arquivo (só números).
 - [LIMITE] Corpos ausentes neste artigo (perícia: sem texto, anotação,

@@ -336,4 +336,39 @@ struct FootnoteTests {
         #expect(fora.map(\.index) == [0, 1])
         #expect(fora[1].notaNumero == nil)
     }
+
+// MARK: - Anúncio pelo pipeline (notaMarcador)
+
+    /// O pipeline marca a frase do marcador; o anúncio não depende mais da
+    /// forma textual do dígito ("mundo 7", "teoria7"), que a regex cala.
+    @Test func pipelineMarcaFraseDoMarcador() {
+        let lista = [
+            fraseSup(0, "argumento segue aqui", pagina: 0, palavras: [("argumento", false), ("7", true), ("segue", false)]),
+            frase(1, "outra frase no meio", pagina: 0),
+            frase(2, "7 Autores afirmam isto aqui", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(fora[0].notaMarcador == 7)
+        #expect(fora[1].notaNumero == 7)
+    }
+
+    /// Com a marca do pipeline, o `forSpeech` anuncia uma vez só, mesmo sem
+    /// dígito nenhum no texto.
+    @Test func marcaDoPipelineAnunciaUmaVez() {
+        let falado = ReadAloudFilter.forSpeech("argumento segue aqui", voice: en, marcador: 7)
+        #expect(falado.components(separatedBy: "footnote 7").count - 1 == 1)
+    }
+
+    /// Marca do pipeline não duplica o anúncio textual (".7" anuncia no
+    /// lugar; o fim da frase não repete).
+    @Test func marcaDoPipelineNaoDuplica() {
+        let falado = ReadAloudFilter.forSpeech("argumento.7 segue", voice: en, marcador: 7)
+        #expect(falado.components(separatedBy: "footnote 7").count - 1 == 1)
+    }
+
+    /// Marca do pipeline com a opção desligada continua calada.
+    @Test func marcaDoPipelineCaladaQuandoDesligada() {
+        let falado = ReadAloudFilter.forSpeech("argumento segue aqui", voice: en, lêNotas: false, marcador: 7)
+        #expect(!falado.contains("footnote"))
+    }
 }

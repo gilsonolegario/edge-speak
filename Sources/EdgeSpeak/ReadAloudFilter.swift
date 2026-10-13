@@ -179,7 +179,7 @@ enum ReadAloudFilter {
     /// vira "R equals there exists u such that T of u, o"), no idioma da voz.
     /// - `lêNotas`: com `false`, o marcador de nota vira pausa e o corpo
     /// (fora da lista de leitura) nunca chega aqui. Default `true`.
-    static func forSpeech(_ text: String, voice: String, lêNotas: Bool = true) -> String {
+    static func forSpeech(_ text: String, voice: String, lêNotas: Bool = true, marcador: Int? = nil) -> String {
         let pt = isPortugueseVoice(voice)
         // Blackboard-bold antes do NFKC: a normalização funde "ℕ" com "N",
         // "ℤ" com "Z" etc., e a tabela de regex já os receberia mortos.
@@ -194,7 +194,7 @@ enum ReadAloudFilter {
         // já lê "1944" como "nineteen forty-four" sozinho.
         if pt { out = spellOutYears(out) }
         out = expandLogic(out, portuguese: pt)
-        out = expandFootnoteMarkers(out, portuguese: pt, anuncia: lêNotas)
+        out = expandFootnoteMarkers(out, portuguese: pt, anuncia: lêNotas, marcador: marcador)
         // As expansões podem duplicar espaços e vírgulas, ou colar vírgula
         // no próximo símbolo ("x,(W"). Ordem: primeiro colapsa, depois espaça.
         out = out.replacingOccurrences(of: "[ ]{2,}", with: " ", options: .regularExpression)
@@ -230,7 +230,7 @@ enum ReadAloudFilter {
     /// "Figura 7" e "1." de início de linha); o "3 x 4" não tem ponto nem
     /// dígito colado e passa intacto. O texto vem do catálogo `L`
     /// ("speech.footnote"), fonte única nos dois idiomas.
-    private static func expandFootnoteMarkers(_ text: String, portuguese pt: Bool, anuncia: Bool = true) -> String {
+    private static func expandFootnoteMarkers(_ text: String, portuguese pt: Bool, anuncia: Bool = true, marcador: Int? = nil) -> String {
         // Sem anúncio (opção desligada): o marcador vira pausa curta, para a
         // frase correr sem prometer nota nenhuma.
         if !anuncia {
@@ -269,6 +269,16 @@ enum ReadAloudFilter {
                 in: out, options: [],
                 range: NSRange(out.startIndex..., in: out),
                 withTemplate: modelo)
+        }
+        // Marcador do pipeline sem expansão textual: o dígito veio em forma
+        // que a regex cala ("mundo 7", "teoria7") — anuncia no fim da frase,
+        // que é onde os corpos ligados começam. Sem duplicar: se a expansão
+        // acima já anunciou este N, nada a fazer.
+        if anuncia, let m = marcador {
+            let anuncio = molde.replacingOccurrences(of: "{0}", with: "\(m)")
+            if !out.localizedCaseInsensitiveContains(anuncio) {
+                out += ", \(anuncio),"
+            }
         }
         return out
     }

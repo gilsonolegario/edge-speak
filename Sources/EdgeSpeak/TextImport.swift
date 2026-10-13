@@ -40,8 +40,13 @@ enum TextImport {
         /// Número da nota de rodapé quando a frase É o corpo de uma nota
         /// (nil para texto corrido). Preenchido por `resolveFootnotes`.
         let notaNumero: Int?
+        /// Número da nota cujo MARCADOR está nesta frase (nil sem marcador).
+        /// Preenchido por `resolveFootnotes`: o anúncio passa a vir do
+        /// pipeline (que desambiguou por geometria+sequência), não da regex
+        /// textual do `forSpeech` — que cala "mundo 7" e "teoria7".
+        var notaMarcador: Int?
 
-        init(index: Int, text: String, page: Int?, rects: [CGRect], words: [WordBox] = [], paragraphEnd: Bool = false, notaNumero: Int? = nil) {
+        init(index: Int, text: String, page: Int?, rects: [CGRect], words: [WordBox] = [], paragraphEnd: Bool = false, notaNumero: Int? = nil, notaMarcador: Int? = nil) {
             self.index = index
             self.text = text
             self.page = page
@@ -49,6 +54,7 @@ enum TextImport {
             self.words = words
             self.paragraphEnd = paragraphEnd
             self.notaNumero = notaNumero
+            self.notaMarcador = notaMarcador
         }
     }
 
@@ -327,6 +333,9 @@ enum TextImport {
             }
             guard let posM = lista.firstIndex(where: { $0.index == idxMarcador })
             else { continue }
+            // O anúncio da nota é do pipeline, não da regex textual: marca a
+            // frase do marcador para o `forSpeech` (primeira ligação vence).
+            if lista[posM].notaMarcador == nil { lista[posM].notaMarcador = corpo.numero }
             // Levanta o corpo e TODAS as continuações de uma vez (remover por
             // índice desloca os seguintes; coletar primeiro evita pular linhas).
             let idxs = ([corpo.frase.index] + corpo.continuacoes.map(\.index)).sorted()

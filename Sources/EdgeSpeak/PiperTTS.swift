@@ -535,7 +535,7 @@ enum PiperTTS {
                 // Texto adaptado para a fala; o publicado segue o original.
                 // Fim de parágrafo ganha `\n` (pausa do modelo; o vão entra na
                 // duração medida do WAV e o offset acumulado segue correto).
-                var falado = ReadAloudFilter.forSpeech(phrase.text, voice: voice, lêNotas: lêNotas)
+                var falado = ReadAloudFilter.forSpeech(phrase.text, voice: voice, lêNotas: lêNotas, marcador: phrase.notaMarcador)
                 if falado.isEmpty { falado = phrase.text }
                 if phrase.paragraphEnd { falado += "\n" }
                 let wavURL = wavsDir.appendingPathComponent(String(format: "frase-%05d.wav", i))

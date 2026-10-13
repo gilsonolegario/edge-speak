@@ -392,7 +392,7 @@ struct Rate: Equatable, Hashable, Sendable {
                         var piece = ""
                         for (idx, ph) in groupPhrases.enumerated() {
                             if idx > 0 { piece += groupPhrases[idx - 1].paragraphEnd ? "\n" : " " }
-                            piece += ReadAloudFilter.forSpeech(ph.text, voice: voice, lêNotas: lêNotas)
+                            piece += ReadAloudFilter.forSpeech(ph.text, voice: voice, lêNotas: lêNotas, marcador: ph.notaMarcador)
                         }
                         let outURL = chunksDir.appendingPathComponent(
                             String(format: "chunk-%04d.mp3", i))
@@ -407,7 +407,7 @@ struct Rate: Equatable, Hashable, Sendable {
                         let linesURL = chunksDir.appendingPathComponent(
                             String(format: "chunk-%04d.lines.txt", i))
                         let speechLines = groupPhrases.map {
-                            ReadAloudFilter.forSpeech($0.text, voice: voice, lêNotas: lêNotas)
+                            ReadAloudFilter.forSpeech($0.text, voice: voice, lêNotas: lêNotas, marcador: $0.notaMarcador)
                         }
                         // Por que o script Python e não o CLI: o CLI só grava
                         // SRT por frase; o script lê os eventos SentenceBoundary

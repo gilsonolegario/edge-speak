@@ -386,11 +386,12 @@ def main() -> int:
         junta = _junta_fim(t_ult, t_pri)
         if junta is None:
             continue
-        w0, w1 = ult["words"][-1], pri["words"][0]
-        b0, b1 = w0["box"], w1["box"]
+        w0 = ult["words"][-1]
+        # A caixa do junto fica SÓ na página anterior: unir através da
+        # virada criaria uma caixa de 600 pt que corrompe a ordem de leitura
+        # e as faixas de margem no Swift — caixa nunca atravessa páginas.
+        # O fragmento da página seguinte é consumido junto.
         w0["text"] = junta
-        w0["box"] = [min(b0[0], b1[0]), min(b0[1], b1[1]),
-                     max(b0[2], b1[2]), max(b0[3], b1[3])]
         pri["words"] = pri["words"][1:]
         ult["text"] = " ".join(w["text"] for w in ult["words"])
         bs = [w["box"] for w in ult["words"]]
