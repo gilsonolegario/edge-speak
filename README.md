@@ -2,7 +2,7 @@
 
 Leitor de PDF e texto com leitura em voz alta em fluxo, para macOS (SwiftUI, macOS 14+). Cada fatia sintetizada começa a tocar assim que fica pronta, sem esperar o documento inteiro — num PDF de 300 páginas a voz entra em segundos. A frase em leitura fica destacada no PDF e no painel de texto; com voz online, a palavra em leitura também é destacada (karaokê).
 
-Estado: em desenvolvimento ativo, com 96 testes em 12 suítes verdes. O contrato técnico entre camadas (arquivos, funções e regras) está no INTERFACE.md; créditos e licenças de terceiros, no CREDITS.md.
+Estado: em desenvolvimento ativo, com 111 testes em 13 suítes verdes. O contrato técnico entre camadas (arquivos, funções e regras) está no INTERFACE.md; créditos e licenças de terceiros, no CREDITS.md.
 
 ## Motores de voz
 
@@ -40,6 +40,18 @@ Atalhos: Enter alterna play/pausa; Espaço faz o mesmo fora do editor e do PDF; 
 Ajustes (⌘,) em três abas: **Leitura** (voz, ritmo, seguir leitura, idioma PT/EN), **Texto** (fonte, texto integral, ler notas de rodapé) e **Avançado** (tamanho do cache em disco e botão de limpeza). Tudo persiste entre sessões. A interface existe nos dois idiomas com troca na hora (catálogo compilado, padrão PT); nomes de voz e mensagens de progresso dos motores seguem no idioma de origem.
 
 Arquivos abrem pelo botão Abrir (PDF, Markdown, texto), por duplo-clique com "Abrir com o EdgeSpeak", por arraste ao ícone e por argumento de linha de comando.
+
+## Instalar o app pronto
+
+O release mais recente fica na aba [Releases](https://github.com/gilsonolegario/edge-speak/releases) do repositório. Baixe o arquivo `EdgeSpeak-vX.Y.Z-macos-arm64.zip`, descompacte com duplo clique e arraste `EdgeSpeak.app` para a pasta **Aplicativos**. Requer macOS 14 ou mais novo e Mac com chip Apple Silicon (arm64).
+
+O app é assinado localmente, sem notarização, então na primeira abertura o macOS avisa que o desenvolvedor não é identificado. Para abrir: clique com o botão direito no ícone → **Abrir** → **Abrir**. Alternativa pelo Terminal, uma vez só:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/EdgeSpeak.app
+```
+
+Para atualizar, baixe o zip do release mais novo e substitua o app na pasta Aplicativos.
 
 ## Compilar, testar, empacotar
 

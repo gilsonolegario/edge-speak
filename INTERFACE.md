@@ -4,7 +4,7 @@ Estado: 2026-10-13. Leitor de PDF/texto com leitura em voz alta em
 **fluxo**: cada fatia sintetizada toca assim que fica pronta. Dois
 motores: edge-tts online (vozes Microsoft neurais, devolve tempos
 por palavra) e Piper offline (um WAV por frase, sem tempos de
-palavra). Árvore verde: **96 testes em 12 suítes** (`swift test`),
+palavra). Árvore verde: **111 testes em 13 suítes** (`swift test`),
 build limpo.
 
 UI no desenho do IINA: **toolbar no topo** (Abrir, Voz, Opções) +
@@ -13,7 +13,7 @@ conteúdo + **barra de controle flutuante na base, sempre visível**.
 - Linguagem: Swift / SwiftUI, plataforma macOS 14+. Pacote SwiftPM
   (Swift 6, modo de linguagem v5), alvo `EdgeSpeak`, fontes em
   `Sources/EdgeSpeak/` (20 arquivos), testes em
-  `Tests/EdgeSpeakTests/` (12 suítes, swift-testing: `@Test`/
+  `Tests/EdgeSpeakTests/` (13 suítes, swift-testing: `@Test`/
   `#expect`, não XCTest).
 - **Decisão de arquitetura:** o motor permanece interno
   (`StreamingPlayer` + `EdgeTTS`/`PiperTTS`). `edge-playback`/mpv
@@ -1054,7 +1054,7 @@ para a próxima síntese de todo modo).
 ## Testes (`Tests/EdgeSpeakTests/`) — o que cada suíte trava
 
 Suítes em swift-testing (`@Test`/`#expect`). `swift test` reporta
-**96 testes em 12 suítes** (conferido em 2026-10-13 por contagem de
+**111 testes em 13 suítes** (conferido em 2026-10-13 por contagem de
 `@Test func`; era 80/9 antes das fases de notas de rodapé, L10n e
 alinhamento, e 88/10 antes do lote de hifenização/virada,
 cache e auditoria de UI):
