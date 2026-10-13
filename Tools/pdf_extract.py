@@ -12,12 +12,15 @@ canto inferior esquerdo).
 Como funciona (guia em docs/pesquisas/pymupdf-pesquisa.md):
 - `words` dá as caixas por palavra; `dict` (sem imagens) dá a estrutura de
   linha/bloco, tamanhos e flags de span — cruzados por (bloco, linha).
-- Hífen de fim de linha é JUNTADO aqui (regra geométrica: última palavra da
-  linha termina com `-`/U+00AD, próxima linha do mesmo bloco começa com
-  minúscula): a palavra junta leva a união das caixas. Hífen no meio da
-  linha ("state-of-the-art") nunca entra na regra. Soft hyphen invisível é
-  removido sempre. Sem dicionário de propósito: o mesmo PDF tem de sair
-  idêntico com ou sem pyphen instalado.
+- Hífen de fim de linha é JUNTADO aqui, inclusive através da virada de
+  página (número solto de página não bloqueia): a palavra junta leva a
+  união das caixas. A decisão é do dicionário do sistema
+  (`/usr/share/dict/words`, presente em todo macOS): quebra de linha some
+  ("en-"+"larged"), composto verdadeiro mantém o hífen ("Wrinkled-Seed").
+  Sem palavra no dicionário, minúscula cola e maiúscula mantém; elisão
+  curta ("l’", "d’") cola sempre. Hífen no meio da linha
+  ("state-of-the-art") nunca entra na regra. Soft hyphen invisível é
+  removido sempre.
 - Sobrescrito (`sup`): bit 1 das flags do span (detecção do MuPDF) ou
   tamanho <0.8×mediana com baseline elevada. Serve à detecção de marcadores
   de nota no Swift.
@@ -52,6 +55,58 @@ def _span_de(palavra_box, spans_linha):
         if area > melhor_area:
             melhor, melhor_area = s, area
     return melhor
+
+
+# Dicionário do sistema para decidir o hífen de fim de linha (preguiçoso:
+# `None` = ainda não carregado). `/usr/share/dict/words` existe em todo
+# macOS; sem ele, o conjunto fica vazio e valem só as regras de caixa.
+_DIC = None
+
+
+def _dic():
+    global _DIC
+    if _DIC is None:
+        try:
+            with open("/usr/share/dict/words", encoding="utf-8") as fh:
+                _DIC = {w.strip().lower() for w in fh if w.strip()}
+        except OSError:
+            _DIC = set()
+    return _DIC
+
+
+def _e_palavra(s):
+    """A colagem é palavra conhecida? Só letras, minúsculas: "enlarged,"
+    vira "enlarged" e acha; "motherin-law" vira "motherinlaw" e não acha
+    (composto verdadeiro, mantém o hífen). Fora do inglês o dicionário
+    não sabe — e as regras de caixa abaixo continuam valendo sozinhas.
+    """
+    chave = "".join(ch for ch in (s or "").lower() if ch.isalpha())
+    return bool(chave) and chave in _dic()
+
+
+def _junta_fim(t_ult, t_pri):
+    """Um texto só juntando fim de linha + início da seguinte, ou None.
+    Elisão curta ("l’", "d’") cola sempre; hífen final consulta o
+    dicionário (quebra some, composto mantém); sem palavra no dicionário,
+    minúscula cola e maiúscula mantém o hífen. Universal: nada aqui cita
+    PDF, página ou artigo específico.
+    """
+    if not t_ult or not t_pri:
+        return None
+    nuc = t_ult.rstrip("’'")
+    if t_ult != nuc and len(t_ult) <= 4 and 1 <= len(nuc) <= 3:
+        return t_ult + t_pri
+    if len(t_ult) >= 2 and t_ult.endswith("-"):
+        base = t_ult[:-1]
+        colado = base + t_pri
+        if _e_palavra(colado):
+            return colado
+        if "-" in t_pri:
+            return t_ult + t_pri
+        if t_pri[0].islower():
+            return colado
+        return t_ult + t_pri
+    return None
 
 
 def _inicia_com_nota(texto):
@@ -183,9 +238,10 @@ def main() -> int:
             if not partes:
                 continue
             ultima = partes[-1]
-            if len(ultima["text"]) < 2 or not (
-                ultima["text"].endswith("-") or ultima["text"].endswith("\u00ad")
-            ):
+            texto_ult = ultima["text"]
+            # Candidato a juncao: hifen final ou elisao curta. A decisao
+            # (dicionario + caixa) sai em `_junta_fim`, apos a adjacencia.
+            if texto_ult[-1:] not in ("-", "\u2019", "'"):
                 continue
             if pos + 1 >= len(chaves):
                 continue
@@ -204,10 +260,9 @@ def main() -> int:
             if not seguintes:
                 continue
             primeira = seguintes[0]["text"]
-            if not primeira or not primeira[0].islower():
+            junta = _junta_fim(texto_ult, primeira)
+            if junta is None:
                 continue
-            base = ultima["text"][:-1]
-            junta = base + primeira
             b0 = ultima["box"]
             b1 = seguintes[0]["box"]
             uniao = [min(b0[0], b1[0]), min(b0[1], b1[1]),
@@ -291,6 +346,63 @@ def main() -> int:
             if candidatas_ok(candidatos, h):
                 regra_y = max(l["box"][3] for l in candidatos)
         pages.append({"index": index, "footnote_rule_y": regra_y, "lines": lines})
+
+    # Junção através da virada de página: última linha de corpo hifenizada
+    # (ou elisão curta) + primeira linha de corpo da página seguinte em
+    # minúscula. Sem isso "en-" + "larged" vira dois fragmentos e o áudio
+    # pica. Só corpo com corpo: abaixo da régua (zona de notas) nunca.
+    for anterior, seguinte in zip(pages, pages[1:]):
+        if not anterior["lines"] or not seguinte["lines"]:
+            continue
+        # Número de página solto ("9", "10") não é texto: ele mora depois
+        # da última linha de corpo e antes da primeira, e bloquearia a
+        # junção. Vale para qualquer PDF: só dígitos, até 4 caracteres.
+        def so_numero(l):
+            return l["words"] and l["text"].strip().isdigit() \
+                and len(l["text"].strip()) <= 4
+        ult = None
+        for l in reversed(anterior["lines"]):
+            if so_numero(l):
+                continue
+            ult = l
+            break
+        pri = None
+        for l in seguinte["lines"]:
+            if so_numero(l):
+                continue
+            pri = l
+            break
+        if ult is None or pri is None:
+            continue
+        if not ult["words"] or not pri["words"]:
+            continue
+        regra_ant = anterior["footnote_rule_y"]
+        if regra_ant is not None and ult["box"][3] < regra_ant:
+            continue
+        if ult.get("note") or pri.get("note"):
+            continue
+        t_ult = ult["words"][-1]["text"]
+        t_pri = pri["words"][0]["text"]
+        junta = _junta_fim(t_ult, t_pri)
+        if junta is None:
+            continue
+        w0, w1 = ult["words"][-1], pri["words"][0]
+        b0, b1 = w0["box"], w1["box"]
+        w0["text"] = junta
+        w0["box"] = [min(b0[0], b1[0]), min(b0[1], b1[1]),
+                     max(b0[2], b1[2]), max(b0[3], b1[3])]
+        pri["words"] = pri["words"][1:]
+        ult["text"] = " ".join(w["text"] for w in ult["words"])
+        bs = [w["box"] for w in ult["words"]]
+        ult["box"] = [min(b[0] for b in bs), min(b[1] for b in bs),
+                      max(b[2] for b in bs), max(b[3] for b in bs)]
+        if pri["words"]:
+            pri["text"] = " ".join(w["text"] for w in pri["words"])
+            cs = [w["box"] for w in pri["words"]]
+            pri["box"] = [min(c[0] for c in cs), min(c[1] for c in cs),
+                          max(c[2] for c in cs), max(c[3] for c in cs)]
+        else:
+            seguinte["lines"] = [l for l in seguinte["lines"] if l is not pri]
 
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump({"pages": pages}, fh, ensure_ascii=False)
