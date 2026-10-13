@@ -1,0 +1,131 @@
+import Foundation
+
+/// Linhas do PDF via PyMuPDF (palavras com caixas), com reserva para PDFKit.
+///
+/// Por que existe: a camada de texto de alguns PDFs não tem os espaços entre
+/// palavras — o `PDFPage.string` cola tudo ("disputesconducted...") e o
+/// narrador engole pausas. O PyMuPDF segmenta em palavras com caixas, então
+/// os espaços voltam a existir. Uso pessoal: sem distribuir, a licença AGPL
+/// não impõe nada; o app continua funcionando sem ele (reserva PDFKit).
+enum PdfWords {
+    struct PageLines: Decodable {
+        let index: Int
+        let lines: [Line]
+        struct Line: Decodable {
+            let text: String
+            let box: [CGFloat]
+            let words: [Word]?
+            struct Word: Decodable {
+                let text: String
+                let box: [CGFloat]
+            }
+        }
+    }
+    struct Output: Decodable {
+        let pages: [PageLines]
+    }
+
+    /// Script no bundle (app empacotado) ou no repo (dev) — mesmo padrão do
+    /// motor de voz.
+    static var scriptPath: String {
+        if let bundled = Bundle.main.url(forResource: "pdf_extract", withExtension: "py") {
+            return bundled.path
+        }
+        return URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Tools/pdf_extract.py").path
+    }
+
+    /// Linhas por página: `[(texto, caixa em coords do PDFKit, palavras)]`,
+    /// ou nil se o PyMuPDF não estiver disponível (o chamador usa o PDFKit).
+    static func lines(pdfURL: URL, pageCount: Int) -> [[(text: String, box: CGRect, words: [(text: String, box: CGRect)])]]? {
+        guard let python = pythonWithFitz() else { return nil }
+        let out = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EdgeSpeak-words-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: out) }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: python)
+        proc.arguments = [scriptPath, "--pdf", pdfURL.path, "--out", out.path]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+        } catch { return nil }
+        let limit = Date().addingTimeInterval(TimeInterval(min(180, 15 + pageCount * 3)))
+        while proc.isRunning, Date() < limit {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        if proc.isRunning { proc.terminate(); return nil }
+        guard proc.terminationStatus == 0,
+              let data = try? Data(contentsOf: out),
+              let parsed = try? JSONDecoder().decode(Output.self, from: data)
+        else { return nil }
+        return parsed.pages.sorted { $0.index < $1.index }.map { page in
+            page.lines.compactMap { line in
+                guard line.box.count == 4 else { return nil }
+                let rect = CGRect(
+                    x: line.box[0], y: line.box[1],
+                    width: max(0, line.box[2] - line.box[0]),
+                    height: max(0, line.box[3] - line.box[1]))
+                guard rect.width > 0, rect.height > 0 else { return nil }
+                let words: [(text: String, box: CGRect)] = (line.words ?? []).compactMap { word in
+                    let text = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty, word.box.count == 4 else { return nil }
+                    let rect = CGRect(
+                        x: word.box[0], y: word.box[1],
+                        width: max(0, word.box[2] - word.box[0]),
+                        height: max(0, word.box[3] - word.box[1]))
+                    guard rect.width > 0, rect.height > 0 else { return nil }
+                    return (text, rect)
+                }
+                return (line.text, rect, words)
+            }
+        }
+    }
+
+    /// Primeiro interpretador que importa `fitz` (não instala nada sozinho).
+    /// Prefere o venv de suporte (embutido), com cache do resultado.
+    private static var fitzCache: String?
+    private static let fitzLock = NSLock()
+
+    private static func pythonWithFitz() -> String? {
+        fitzLock.lock()
+        if let cached = fitzCache {
+            fitzLock.unlock()
+            return cached == "" ? nil : cached
+        }
+        fitzLock.unlock()
+        let found = searchPythonWithFitz()
+        fitzLock.lock()
+        fitzCache = found ?? ""
+        fitzLock.unlock()
+        return found
+    }
+
+    private static func searchPythonWithFitz() -> String? {
+        var seen: [String] = []
+        func add(_ path: String) {
+            if !seen.contains(path) { seen.append(path) }
+        }
+        // O venv de suporte já traz fitz verificado pelo `ensure`: entra
+        // primeiro e evita probes repetidos nas máquinas com bundle.
+        if let pronto = BundledEnv.readyPython() { add(pronto) }
+        add(EdgeTTS.pythonPath)
+        add(PiperTTS.venvPython.path)
+        add("/opt/homebrew/bin/python3")
+        add("/usr/bin/python3")
+        for candidate in seen where FileManager.default.isExecutableFile(atPath: candidate) {
+            let probe = Process()
+            probe.executableURL = URL(fileURLWithPath: candidate)
+            probe.arguments = ["-c", "import fitz"]
+            probe.standardOutput = FileHandle.nullDevice
+            probe.standardError = FileHandle.nullDevice
+            try? probe.run()
+            probe.waitUntilExit()
+            if probe.terminationStatus == 0 { return candidate }
+        }
+        return nil
+    }
+}

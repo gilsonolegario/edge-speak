@@ -1,0 +1,436 @@
+import Foundation
+
+/// Catálogo de textos da interface em PT e EN (fase 1 da tradução PT→EN).
+///
+/// Desenho aprovado: tabelas compiladas, sem `Package.swift` novo nem
+/// dependência nova. A fase 1 só CRIA o catálogo — nenhum ponto de uso muda
+/// (a troca entra na fase 2, que vai chamar `L.get` e guardar
+/// `statusKey+args` no `SpeechController`).
+///
+/// Convenções:
+/// - A tabela PT é CÓPIA verbatim dos literais atuais (sem reescrever).
+/// - A tabela EN é inglês fluente e neutro.
+/// - Interpolação é posicional (`{0}`, `{1}`…); o resolvedor troca cada
+///   marcador por `String(describing:)` do argumento na mesma posição.
+/// - Quando a chave falta no idioma pedido, cai para o PT; sem chave em
+///   nenhum dos dois, devolve a própria chave (nunca vazio).
+enum L {
+    /// Idioma da interface, persistido como `rawValue` no `@AppStorage`.
+    enum Idioma: String {
+        case pt = "pt"
+        case en = "en"
+    }
+
+    /// Padrão: português — o comportamento atual não muda até a fase 2.
+    static let padrao: Idioma = .pt
+
+    /// Ponto de uso da fase 2 (forma variádica, para literais com o
+    /// argumento à mão).
+    static func get(_ chave: String, locale: Idioma = .pt, args: Any...) -> String {
+        resolve(chave, locale: locale, args: args)
+    }
+
+    /// Núcleo do resolvedor. Recebe as tabelas como parâmetro para a fase 2
+    /// poder re-resolver uma mensagem guardada (`statusKey+args`) e para os
+    /// testes cobrirem o fallback sem mexer no catálogo.
+    static func resolve(
+        _ chave: String,
+        locale: Idioma = .pt,
+        args: [Any] = [],
+        tabelas: [Idioma: [String: String]]? = nil
+    ) -> String {
+        let tabs = tabelas ?? [.pt: pt, .en: en]
+        if let texto = tabs[locale]?[chave] { return aplicaArgs(texto, args) }
+        if let texto = tabs[.pt]?[chave] { return aplicaArgs(texto, args) }
+        return chave
+    }
+
+    /// Troca `{0}`, `{1}`… pelos argumentos; marcador sem argumento passa
+    /// direto (não quebra a frase, só não interpola).
+    private static func aplicaArgs(_ texto: String, _ args: [Any]) -> String {
+        guard !args.isEmpty else { return texto }
+        var saida = texto
+        for (i, arg) in args.enumerated() {
+            saida = saida.replacingOccurrences(of: "{\(i)}", with: String(describing: arg))
+        }
+        return saida
+    }
+
+    // MARK: - PT (verbatim dos literais atuais)
+
+    static let pt: [String: String] = [
+        // Faixa de status (SpeechController + ContentView).
+        "status.readingPDF": "Lendo o PDF…",
+        "status.openFailed": "Falha ao abrir: {0}",
+        "status.fileLoaded": "Arquivo carregado: {0} ({1} caracteres).",
+        "status.generatingNext": "Gerando o áudio seguinte…",
+        "status.playing": "Tocando…",
+        "status.paused": "Pausado.",
+        "status.finished": "Leitura concluída.",
+        "status.noText": "Sem texto para ler.",
+        "status.playingFromCache": "Tocando… (do cache)",
+        "status.longTextEstimate": "Texto longo ({0} caracteres): cerca de {1} min para sintetizar.",
+        "status.synthesizingCount": "Sintetizando {0} caracteres (~{1}s)…",
+        "status.synthesizing": "Sintetizando…",
+        "status.playingWhileSynthesizing": "Tocando… (sintetizando o resto)",
+        "status.transcriptionDiscarded": "Transcrição descartada.",
+        "status.waitForSynthesisToJump": "Aguarde a síntese para pular até essa frase.",
+        "status.generatingPassage": "Gerando o áudio desse trecho…",
+        "status.stopped": "Parado.",
+        "status.noAudioToExport": "Nenhum áudio para exportar.",
+        "status.audioSaved": "Áudio salvo em {0}.",
+        "status.exportFailed": "Falha ao exportar: {0}",
+        "status.onlineBlocked": "A voz online (Microsoft) está recusando conexões no mundo todo desde 10/10. Use uma voz Offline (ex.: Faber) enquanto isso.",
+        // Janela principal.
+        "ui.emptyPlaceholder": "Abra um PDF ou cole um texto para começar a ouvir",
+        "ui.openFile": "Abrir arquivo",
+        "help.importFile": "Importar um PDF, Markdown ou texto",
+        "ui.open": "Abrir",
+        "ui.textPanel": "Texto",
+        "ui.noHighlight": "sem destaque",
+        "ui.offlineVoiceBadge": "Voz offline: Piper",
+        "ui.voiceLabel": "Voz",
+        "help.readingVoice": "Voz da leitura",
+        "ui.followReading": "Seguir leitura",
+        "ui.goToPassage": "Ir para o trecho",
+        "ui.decreaseFont": "Diminuir fonte",
+        "ui.increaseFont": "Aumentar fonte",
+        "ui.defaultSize": "Tamanho padrão",
+        "ui.newReading": "Gerar leitura nova",
+        "help.redoSynthesis": "Descarta a transcrição atual e sintetiza de novo",
+        "ui.settings": "Ajustes…",
+        "ui.options": "Opções",
+        "help.optionsMenu": "Ações do momento e Ajustes",
+        // Seções do seletor de voz (ContentView + SettingsView).
+        "section.offline": "Offline",
+        "section.english": "Inglês",
+        "section.portuguese": "Português",
+        // Barra de transporte.
+        "player.exportAudio": "Exportar a leitura em áudio",
+        "player.stopSynthesis": "Interromper a síntese (⌘.)",
+        "player.stopReading": "Parar a leitura",
+        "player.pause": "Pausar",
+        "player.play": "Play",
+        "player.playPauseHelp": "Iniciar, pausar ou retomar a leitura (Enter)",
+        "player.scrubHelp": "Arrastar para navegar no áudio",
+        "player.charCount": "{0} caracteres",
+        "player.textSizeHelp": "Tamanho do texto a ser lido",
+        "player.volumeHelp": "Volume da leitura",
+        "player.skipForward": "Avançar 15 s (⌥→)",
+        "player.skipBack": "Voltar 15 s (⌥←)",
+        // Ajustes.
+        "settings.readingTab": "Leitura",
+        "settings.textTab": "Texto",
+        "settings.advancedTab": "Avançado",
+        "settings.rateLabel": "Ritmo",
+        "help.rateHelp": "Cadência da fala; vale para a próxima síntese",
+        "help.followHelp": "Rola o texto e o PDF até o trecho lido",
+        "settings.fontSize": "Tamanho da fonte ({0} pt)",
+        "settings.restoreDefaultSize": "Restaurar tamanho padrão",
+        "settings.integralText": "Texto integral",
+        "help.integralHelp": "Lê o texto corrido, sem filtrar repetições e cabeçalhos",
+        "settings.integralNote": "Trocar o modo descarta a transcrição atual e reinicia a leitura.",
+        "settings.noAdvanced": "Nenhuma opção avançada disponível no momento.",
+        "settings.languageLabel": "Idioma",
+        // Cadência (EdgeTTS.Rate).
+        "rate.normal": "Normal",
+        // Nome padrão no painel de exportação (SpeechController).
+        "export.defaultWav": "leitura.wav",
+        "export.defaultMp3": "leitura.mp3",
+        // Progresso dos motores (chega ao status).
+        "progress.chunkFraction": "Sintetizando {0}/{1}…",
+        "progress.downloadingVoiceFile": "Baixando a voz offline {0} (~63 MB, só desta vez)…",
+        "progress.downloadingVoiceMBTotal": "Baixando a voz offline ({0}/{1} MB)…",
+        "progress.downloadingVoiceMB": "Baixando a voz offline ({0} MB)…",
+        "progress.loadingOfflineVoice": "Carregando a voz offline (só desta vez por leitura)…",
+        "progress.preparingEnv": "Preparando o ambiente (só na primeira vez)…",
+        "progress.installingPackages": "Instalando os pacotes (sem rede, só na primeira vez)…",
+        "progress.applyingEdgePatch": "Aplicando o remendo do edge-tts…",
+        // Falhas e erros que chegam ao usuário (via status/failureMessage).
+        "error.synthesisFailed": "Falha na síntese: {0}",
+        "error.nothingToSynthesize": "Nada para sintetizar: o texto está vazio.",
+        "error.chunkFailed": "edge-tts falhou após {0} tentativas na fatia {1}/{2}: {3}",
+        "error.incompleteSynthesis": "Síntese incompleta: {0} de {1} fatias.",
+        "error.cannotCreateFile": "Não foi possível criar {0}.",
+        "error.concatEmpty": "A concatenação não gerou áudio.",
+        "error.noStderrFile": "Não foi possível criar arquivo temporário de stderr.",
+        "error.cannotExecute": "Não foi possível executar {0}: {1}",
+        "error.processTimeout": "{0} não respondeu em {1}s e foi encerrado. {2}",
+        "error.ffmpegFailed": "ffmpeg falhou (status {0}): {1}",
+        "error.offlineVenvCreate": "Não foi possível criar o ambiente da voz offline ({0}). Verifique se o python3 está instalado.",
+        "error.offlineInstall": "Falha ao instalar a voz offline ({0}). Verifique a rede e tente de novo.",
+        "error.unknownOfflineVoice": "Voz offline desconhecida: {0}.",
+        "error.invalidVoiceAddress": "Endereço inválido para a voz {0}.",
+        "error.voiceDownloadIncomplete": "O download da voz {0} veio incompleto ({1} de {2} bytes). Tente de novo.",
+        "error.voiceDownloadCorrupt": "O download da voz {0} veio corrompido. Tente de novo.",
+        "error.offlineStartFailed": "Não foi possível iniciar a voz offline: {0}",
+        "error.offlineNotReady": "A voz offline não respondeu ao carregar. Tente de novo.",
+        "error.offlineTerminated": "A voz offline foi encerrada no meio da leitura.",
+        "error.offlinePhraseFailed": "A voz offline falhou numa frase: {0}",
+        "error.offlineTimeout": "A voz offline não respondeu a tempo e foi encerrada.",
+        "error.offlineNoAudioOnPhrase": "A voz offline não gerou áudio na frase {0}.",
+        "error.nothingToJoin": "Nada para juntar: nenhuma frase sintetizada.",
+        "error.joinEmpty": "A junção não gerou áudio.",
+        "error.invalidWavOnJoin": "WAV inválido na junção.",
+        "error.bundledPythonMissing": "Falta o Python embutido no app. Reinstale o EdgeSpeak.",
+        "error.localEnvCreate": "Não foi possível criar o ambiente local ({0}).",
+        "error.localEnvEnsurepip": "Não foi possível completar o ambiente local ({0}).",
+        "error.bundledWheelsMissing": "Faltam os pacotes embutidos no app. Reinstale o EdgeSpeak.",
+        "error.bundledInstallFailed": "Falha ao instalar os pacotes embutidos ({0}).",
+        "error.bundledFilesMissing": "Faltam arquivos embutidos no app. Reinstale o EdgeSpeak.",
+        "error.edgePatchFailed": "Falha no remendo do edge-tts ({0}).",
+        "error.localEnvVerify": "O ambiente local não passou na verificação. Tente de novo.",
+        "error.cannotOpenPDF": "Não foi possível abrir o PDF.",
+        "error.pdfWithoutTextLayer": "PDF sem camada de texto; não há o que ler.",
+        "error.emptyFile": "Arquivo vazio; não há o que ler.",
+        "error.unsupportedExtension": "Extensão não suportada: .{0}. Use .pdf, .md ou .txt.",
+        // Miudezas compartilhadas (mesmo literal em vários pontos).
+        "common.synthesisCancelled": "Síntese cancelada.",
+        "common.timedOut": "tempo esgotado após {0}s",
+        "common.noStderrEdge": "(sem saída em stderr)",
+        "common.noDetails": "(sem detalhes)",
+        "common.noStderr": "(sem stderr)",
+        // Rótulos das vozes online (AppSetting.voiceLabels).
+        "voice.en-US-AnaNeural": "Ana (EUA, feminino)",
+        "voice.en-US-AndrewNeural": "Andrew (EUA, masculino)",
+        "voice.en-US-AriaNeural": "Aria (EUA, feminino)",
+        "voice.en-US-AvaNeural": "Ava (EUA, feminino)",
+        "voice.en-US-BrianNeural": "Brian (EUA, masculino)",
+        "voice.en-US-ChristopherNeural": "Christopher (EUA, masculino)",
+        "voice.en-US-EmmaNeural": "Emma (EUA, feminino)",
+        "voice.en-US-EricNeural": "Eric (EUA, masculino)",
+        "voice.en-US-GuyNeural": "Guy (EUA, masculino)",
+        "voice.en-US-JennyNeural": "Jenny (EUA, feminino)",
+        "voice.en-US-MichelleNeural": "Michelle (EUA, feminino)",
+        "voice.en-US-RogerNeural": "Roger (EUA, masculino)",
+        "voice.en-US-SteffanNeural": "Steffan (EUA, masculino)",
+        "voice.en-AU-NatashaNeural": "Natasha (Austrália, feminino)",
+        "voice.en-AU-WilliamMultilingualNeural": "William (Austrália, masculino)",
+        "voice.en-CA-ClaraNeural": "Clara (Canadá, feminino)",
+        "voice.en-CA-LiamNeural": "Liam (Canadá, masculino)",
+        "voice.en-GB-LibbyNeural": "Libby (Reino Unido, feminino)",
+        "voice.en-GB-MaisieNeural": "Maisie (Reino Unido, feminino)",
+        "voice.en-GB-RyanNeural": "Ryan (Reino Unido, masculino)",
+        "voice.en-GB-SoniaNeural": "Sonia (Reino Unido, feminino)",
+        "voice.en-GB-ThomasNeural": "Thomas (Reino Unido, masculino)",
+        "voice.en-HK-SamNeural": "Sam (Hong Kong, masculino)",
+        "voice.en-HK-YanNeural": "Yan (Hong Kong, feminino)",
+        "voice.en-IE-ConnorNeural": "Connor (Irlanda, masculino)",
+        "voice.en-IE-EmilyNeural": "Emily (Irlanda, feminino)",
+        "voice.en-IN-NeerjaNeural": "Neerja (Índia, feminino)",
+        "voice.en-IN-PrabhatNeural": "Prabhat (Índia, masculino)",
+        "voice.en-KE-AsiliaNeural": "Asilia (Quênia, feminino)",
+        "voice.en-KE-ChilembaNeural": "Chilemba (Quênia, masculino)",
+        "voice.en-NG-AbeoNeural": "Abeo (Nigéria, masculino)",
+        "voice.en-NG-EzinneNeural": "Ezinne (Nigéria, feminino)",
+        "voice.en-NZ-MitchellNeural": "Mitchell (Nova Zelândia, masculino)",
+        "voice.en-NZ-MollyNeural": "Molly (Nova Zelândia, feminino)",
+        "voice.en-PH-JamesNeural": "James (Filipinas, masculino)",
+        "voice.en-PH-RosaNeural": "Rosa (Filipinas, feminino)",
+        "voice.en-SG-LunaNeural": "Luna (Singapura, feminino)",
+        "voice.en-SG-WayneNeural": "Wayne (Singapura, masculino)",
+        "voice.en-TZ-ElimuNeural": "Elimu (Tanzânia, masculino)",
+        "voice.en-TZ-ImaniNeural": "Imani (Tanzânia, feminino)",
+        "voice.en-ZA-LeahNeural": "Leah (África do Sul, feminino)",
+        "voice.en-ZA-LukeNeural": "Luke (África do Sul, masculino)",
+        "voice.pt-BR-FranciscaNeural": "Francisca (BR, feminino)",
+        "voice.pt-BR-AntonioNeural": "Antonio (BR, masculino)",
+        "voice.pt-BR-ThalitaMultilingualNeural": "Thalita (BR, feminino)",
+        "voice.pt-PT-DuarteNeural": "Duarte (PT, masculino)",
+        "voice.pt-PT-RaquelNeural": "Raquel (PT, feminino)",
+        // Rótulos das vozes offline (PiperTTS.label).
+        "voice.offline-faber-ptbr": "Faber (BR, masculino, offline)",
+        "voice.offline-edresson-ptbr": "Edresson (BR, offline)",
+        "voice.offline-cadu-ptbr": "Cadu (BR, offline)",
+        "voice.offline-jeff-ptbr": "Jeff (BR, offline)",
+        "voice.offline-lessac-enus": "Lessac (EUA, masculino, offline)",
+    ]
+
+    // MARK: - EN (inglês fluente, neutro)
+
+    static let en: [String: String] = [
+        "status.readingPDF": "Reading the PDF…",
+        "status.openFailed": "Failed to open: {0}",
+        "status.fileLoaded": "File loaded: {0} ({1} characters).",
+        "status.generatingNext": "Generating the next audio…",
+        "status.playing": "Playing…",
+        "status.paused": "Paused.",
+        "status.finished": "Reading finished.",
+        "status.noText": "No text to read.",
+        "status.playingFromCache": "Playing… (from cache)",
+        "status.longTextEstimate": "Long text ({0} characters): about {1} min to synthesize.",
+        "status.synthesizingCount": "Synthesizing {0} characters (~{1}s)…",
+        "status.synthesizing": "Synthesizing…",
+        "status.playingWhileSynthesizing": "Playing… (synthesizing the rest)",
+        "status.transcriptionDiscarded": "Transcription discarded.",
+        "status.waitForSynthesisToJump": "Wait for synthesis to jump to that sentence.",
+        "status.generatingPassage": "Generating the audio for this passage…",
+        "status.stopped": "Stopped.",
+        "status.noAudioToExport": "No audio to export.",
+        "status.audioSaved": "Audio saved as {0}.",
+        "status.exportFailed": "Export failed: {0}",
+        "status.onlineBlocked": "The online voice (Microsoft) has been refusing connections worldwide since 10/10. Use an Offline voice (e.g. Faber) meanwhile.",
+        "ui.emptyPlaceholder": "Open a PDF or paste some text to start listening",
+        "ui.openFile": "Open File",
+        "help.importFile": "Import a PDF, Markdown, or text file",
+        "ui.open": "Open",
+        "ui.textPanel": "Text",
+        "ui.noHighlight": "no highlighting",
+        "ui.offlineVoiceBadge": "Offline voice: Piper",
+        "ui.voiceLabel": "Voice",
+        "help.readingVoice": "Reading voice",
+        "ui.followReading": "Follow reading",
+        "ui.goToPassage": "Go to the passage",
+        "ui.decreaseFont": "Decrease font size",
+        "ui.increaseFont": "Increase font size",
+        "ui.defaultSize": "Default size",
+        "ui.newReading": "Generate new reading",
+        "help.redoSynthesis": "Discards the current transcription and synthesizes again",
+        "ui.settings": "Settings…",
+        "ui.options": "Options",
+        "help.optionsMenu": "Current actions and Settings",
+        "section.offline": "Offline",
+        "section.english": "English",
+        "section.portuguese": "Portuguese",
+        "player.exportAudio": "Export the reading as audio",
+        "player.stopSynthesis": "Interrupt synthesis (⌘.)",
+        "player.stopReading": "Stop reading",
+        "player.pause": "Pause",
+        "player.play": "Play",
+        "player.playPauseHelp": "Start, pause, or resume reading (Enter)",
+        "player.scrubHelp": "Drag to navigate the audio",
+        "player.charCount": "{0} characters",
+        "player.textSizeHelp": "Size of the text to be read",
+        "player.volumeHelp": "Reading volume",
+        "player.skipForward": "Skip forward 15 s (⌥→)",
+        "player.skipBack": "Skip back 15 s (⌥←)",
+        "settings.readingTab": "Reading",
+        "settings.textTab": "Text",
+        "settings.advancedTab": "Advanced",
+        "settings.rateLabel": "Rate",
+        "help.rateHelp": "Speech rate; applies to the next synthesis",
+        "help.followHelp": "Scrolls the text and the PDF to the passage being read",
+        "settings.fontSize": "Font size ({0} pt)",
+        "settings.restoreDefaultSize": "Restore default size",
+        "settings.integralText": "Full text",
+        "help.integralHelp": "Reads the full text, without filtering repetitions and headers",
+        "settings.integralNote": "Switching modes discards the current transcription and restarts reading.",
+        "settings.noAdvanced": "No advanced options available right now.",
+        "settings.languageLabel": "Language",
+        "rate.normal": "Normal",
+        "export.defaultWav": "reading.wav",
+        "export.defaultMp3": "reading.mp3",
+        "progress.chunkFraction": "Synthesizing {0}/{1}…",
+        "progress.downloadingVoiceFile": "Downloading the offline voice {0} (~63 MB, only this time)…",
+        "progress.downloadingVoiceMBTotal": "Downloading the offline voice ({0}/{1} MB)…",
+        "progress.downloadingVoiceMB": "Downloading the offline voice ({0} MB)…",
+        "progress.loadingOfflineVoice": "Loading the offline voice (only once per reading)…",
+        "progress.preparingEnv": "Preparing the environment (only the first time)…",
+        "progress.installingPackages": "Installing the packages (offline, only the first time)…",
+        "progress.applyingEdgePatch": "Applying the edge-tts patch…",
+        "error.synthesisFailed": "Synthesis failed: {0}",
+        "error.nothingToSynthesize": "Nothing to synthesize: the text is empty.",
+        "error.chunkFailed": "edge-tts failed after {0} attempts on chunk {1}/{2}: {3}",
+        "error.incompleteSynthesis": "Incomplete synthesis: {0} of {1} chunks.",
+        "error.cannotCreateFile": "Could not create {0}.",
+        "error.concatEmpty": "Concatenation produced no audio.",
+        "error.noStderrFile": "Could not create a temporary stderr file.",
+        "error.cannotExecute": "Could not run {0}: {1}",
+        "error.processTimeout": "{0} did not respond within {1}s and was terminated. {2}",
+        "error.ffmpegFailed": "ffmpeg failed (status {0}): {1}",
+        "error.offlineVenvCreate": "Could not create the offline voice environment ({0}). Check that python3 is installed.",
+        "error.offlineInstall": "Failed to install the offline voice ({0}). Check the network and try again.",
+        "error.unknownOfflineVoice": "Unknown offline voice: {0}.",
+        "error.invalidVoiceAddress": "Invalid address for voice {0}.",
+        "error.voiceDownloadIncomplete": "The download of voice {0} is incomplete ({1} of {2} bytes). Try again.",
+        "error.voiceDownloadCorrupt": "The download of voice {0} is corrupted. Try again.",
+        "error.offlineStartFailed": "Could not start the offline voice: {0}",
+        "error.offlineNotReady": "The offline voice did not respond while loading. Try again.",
+        "error.offlineTerminated": "The offline voice was terminated mid-reading.",
+        "error.offlinePhraseFailed": "The offline voice failed on a sentence: {0}",
+        "error.offlineTimeout": "The offline voice did not respond in time and was terminated.",
+        "error.offlineNoAudioOnPhrase": "The offline voice produced no audio for sentence {0}.",
+        "error.nothingToJoin": "Nothing to join: no sentences were synthesized.",
+        "error.joinEmpty": "Joining produced no audio.",
+        "error.invalidWavOnJoin": "Invalid WAV while joining.",
+        "error.bundledPythonMissing": "The bundled Python is missing from the app. Reinstall EdgeSpeak.",
+        "error.localEnvCreate": "Could not create the local environment ({0}).",
+        "error.localEnvEnsurepip": "Could not finish setting up the local environment ({0}).",
+        "error.bundledWheelsMissing": "The bundled packages are missing from the app. Reinstall EdgeSpeak.",
+        "error.bundledInstallFailed": "Failed to install the bundled packages ({0}).",
+        "error.bundledFilesMissing": "Bundled files are missing from the app. Reinstall EdgeSpeak.",
+        "error.edgePatchFailed": "Failed to patch edge-tts ({0}).",
+        "error.localEnvVerify": "The local environment did not pass verification. Try again.",
+        "error.cannotOpenPDF": "Could not open the PDF.",
+        "error.pdfWithoutTextLayer": "The PDF has no text layer; nothing to read.",
+        "error.emptyFile": "Empty file; nothing to read.",
+        "error.unsupportedExtension": "Unsupported extension: .{0}. Use .pdf, .md, or .txt.",
+        "common.synthesisCancelled": "Synthesis cancelled.",
+        "common.timedOut": "timed out after {0}s",
+        "common.noStderrEdge": "(no stderr output)",
+        "common.noDetails": "(no details)",
+        "common.noStderr": "(no stderr)",
+        "voice.en-US-AnaNeural": "Ana (USA, feminine)",
+        "voice.en-US-AndrewNeural": "Andrew (USA, masculine)",
+        "voice.en-US-AriaNeural": "Aria (USA, feminine)",
+        "voice.en-US-AvaNeural": "Ava (USA, feminine)",
+        "voice.en-US-BrianNeural": "Brian (USA, masculine)",
+        "voice.en-US-ChristopherNeural": "Christopher (USA, masculine)",
+        "voice.en-US-EmmaNeural": "Emma (USA, feminine)",
+        "voice.en-US-EricNeural": "Eric (USA, masculine)",
+        "voice.en-US-GuyNeural": "Guy (USA, masculine)",
+        "voice.en-US-JennyNeural": "Jenny (USA, feminine)",
+        "voice.en-US-MichelleNeural": "Michelle (USA, feminine)",
+        "voice.en-US-RogerNeural": "Roger (USA, masculine)",
+        "voice.en-US-SteffanNeural": "Steffan (USA, masculine)",
+        "voice.en-AU-NatashaNeural": "Natasha (Australia, feminine)",
+        "voice.en-AU-WilliamMultilingualNeural": "William (Australia, masculine)",
+        "voice.en-CA-ClaraNeural": "Clara (Canada, feminine)",
+        "voice.en-CA-LiamNeural": "Liam (Canada, masculine)",
+        "voice.en-GB-LibbyNeural": "Libby (United Kingdom, feminine)",
+        "voice.en-GB-MaisieNeural": "Maisie (United Kingdom, feminine)",
+        "voice.en-GB-RyanNeural": "Ryan (United Kingdom, masculine)",
+        "voice.en-GB-SoniaNeural": "Sonia (United Kingdom, feminine)",
+        "voice.en-GB-ThomasNeural": "Thomas (United Kingdom, masculine)",
+        "voice.en-HK-SamNeural": "Sam (Hong Kong, masculine)",
+        "voice.en-HK-YanNeural": "Yan (Hong Kong, feminine)",
+        "voice.en-IE-ConnorNeural": "Connor (Ireland, masculine)",
+        "voice.en-IE-EmilyNeural": "Emily (Ireland, feminine)",
+        "voice.en-IN-NeerjaNeural": "Neerja (India, feminine)",
+        "voice.en-IN-PrabhatNeural": "Prabhat (India, masculine)",
+        "voice.en-KE-AsiliaNeural": "Asilia (Kenya, feminine)",
+        "voice.en-KE-ChilembaNeural": "Chilemba (Kenya, masculine)",
+        "voice.en-NG-AbeoNeural": "Abeo (Nigeria, masculine)",
+        "voice.en-NG-EzinneNeural": "Ezinne (Nigeria, feminine)",
+        "voice.en-NZ-MitchellNeural": "Mitchell (New Zealand, masculine)",
+        "voice.en-NZ-MollyNeural": "Molly (New Zealand, feminine)",
+        "voice.en-PH-JamesNeural": "James (Philippines, masculine)",
+        "voice.en-PH-RosaNeural": "Rosa (Philippines, feminine)",
+        "voice.en-SG-LunaNeural": "Luna (Singapore, feminine)",
+        "voice.en-SG-WayneNeural": "Wayne (Singapore, masculine)",
+        "voice.en-TZ-ElimuNeural": "Elimu (Tanzania, masculine)",
+        "voice.en-TZ-ImaniNeural": "Imani (Tanzania, feminine)",
+        "voice.en-ZA-LeahNeural": "Leah (South Africa, feminine)",
+        "voice.en-ZA-LukeNeural": "Luke (South Africa, masculine)",
+        "voice.pt-BR-FranciscaNeural": "Francisca (Brazil, feminine)",
+        "voice.pt-BR-AntonioNeural": "Antonio (Brazil, masculine)",
+        "voice.pt-BR-ThalitaMultilingualNeural": "Thalita (Brazil, feminine)",
+        "voice.pt-PT-DuarteNeural": "Duarte (Portugal, masculine)",
+        "voice.pt-PT-RaquelNeural": "Raquel (Portugal, feminine)",
+        "voice.offline-faber-ptbr": "Faber (Brazil, masculine, offline)",
+        "voice.offline-edresson-ptbr": "Edresson (Brazil, offline)",
+        "voice.offline-cadu-ptbr": "Cadu (Brazil, offline)",
+        "voice.offline-jeff-ptbr": "Jeff (Brazil, offline)",
+        "voice.offline-lessac-enus": "Lessac (USA, masculine, offline)",
+    ]
+}
+
+/// Chave do `@AppStorage` com o idioma da interface.
+///
+/// Mora aqui (não no `AppSettings.swift`) de propósito: a fase 1 não edita
+/// nenhum arquivo existente. O valor é o `rawValue` de `L.Idioma`, com
+/// padrão PT — o comportamento atual não muda até a fase 2 ligar a troca.
+extension AppSetting {
+    static let languageKey = "appLanguage"
+    static let languageDefault = L.Idioma.pt.rawValue
+}
