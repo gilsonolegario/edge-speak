@@ -22,6 +22,11 @@ Repo público com histórico desde `0aa5658`.
   rodapé" (default ligado; desligado vira pausa). Commit `5a4f6a5`.
 - [CÓDIGO] Ligação em ordem crescente de número + posições rederivadas
   (não guarda posição após mover). Commit `9e45736`.
+- [CÓDIGO] Régua horizontal como zona de notas + várias notas por página
+  (sem marcador e abaixo da régua: sem número, marcada, no lugar).
+  Commit `e0c5cdc`.
+- [MEDIDO] No artigo de teste: 12 marcadores distintos (1–12), 12
+  ocorrências — todos anunciados; 0 corpos no arquivo (só números).
 - [LIMITE] Corpos ausentes neste artigo (perícia: sem texto, anotação,
   imagem ou glifo — só números 1–15): anúncio sem corpo seguinte. Não
   inventar; documentado no código.
