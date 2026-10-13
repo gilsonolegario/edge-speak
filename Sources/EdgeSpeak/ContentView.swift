@@ -552,6 +552,11 @@ struct ContentView: View {
             controller.pause()
             return
         }
+        // (Re)começar a leitura retoma o seguimento: sem isso, um desligamento
+        // antigo (rolagem manual, que persiste) congelava a vista para sempre
+        // e o destaque nunca atravessava a página. Rolar manualmente desliga
+        // de novo no momento — o botão "Ir para o trecho" continua valendo.
+        followReading = true
         // Retomada de pausa interna: o áudio já está onde parou — sem busca.
         let retomavaPausa = controller.isPaused
         controller.play(phrases: playList(), voice: voice, rate: rate, lêNotas: lêNotas)
@@ -581,8 +586,10 @@ struct ContentView: View {
     private func clickToPlay(index: Int) {
         // O token de revelação leva o PDF até o trecho clicado na hora — sem
         // ele o salto só mudava o áudio e a vista ficava parada (o seguimento
-        // desligado nunca rola sozinho).
+        // desligado nunca rola sozinho). Também religa o seguimento, pelo
+        // mesmo motivo do togglePlay.
         revealToken += 1
+        followReading = true
         if controller.jumpToSegment(index) { return }
         // Sem `hasAudio` aqui de propósito: ele fica true após o Stop (a fila
         // esvazia mas a flag não cai — auditoria 2026-10-13) e barraria o play
