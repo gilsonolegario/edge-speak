@@ -321,9 +321,12 @@ struct ContentView: View {
             // Palavra em cor própria, distinta da linha: texto branco em
             // negrito sobre fundo de destaque forte — legível nos dois temas
             // e inconfundível com o fundo suave da frase.
-            attributed[wordRange].appKit.foregroundColor = NSColor.white
+            // Palavra em AMARELO como no PDF (não mais no azul do sistema): texto
+            // escuro sobre amarelo lê bem nos dois temas e unifica o karaokê
+            // nas duas vistas — era a divergência que a auditoria apontou.
+            attributed[wordRange].appKit.foregroundColor = NSColor.black
             attributed[wordRange].appKit.backgroundColor =
-                NSColor.controlAccentColor.withAlphaComponent(0.65)
+                NSColor.systemYellow.withAlphaComponent(0.75)
         }
         return attributed
     }
@@ -488,7 +491,7 @@ struct ContentView: View {
                     // A rolagem manual desliga o follow (o PDFDocumentView avisa
                     // via onUserScroll); o botão aparece quando o follow está
                     // desligado, durante a leitura.
-                    if isReading && !followReading {
+                    if (isReading || controller.isBusy) && !followReading {
                         HStack {
                             Spacer()
                             Button {
@@ -690,10 +693,10 @@ struct ContentView: View {
     /// chave (`AppSetting.followKey`), então nunca diverge.
     private var optionsMenu: some View {
         Menu {
-            if pdfDocument != nil {
-                Toggle(L.get("ui.followReading", locale: idioma), isOn: $followReading)
-                Divider()
-            }
+            // Sem o `if pdfDocument`: no modo só-texto o teleprompter também
+            // rola sozinho e o usuário precisa desligar (achado da auditoria).
+            Toggle(L.get("ui.followReading", locale: idioma), isOn: $followReading)
+            Divider()
 
             Button {
                 adjustFont(by: -2)

@@ -90,19 +90,41 @@ struct ClickableTextView: NSViewRepresentable {
     }
 }
 
-/// `NSTextView` que reporta o caractere clicado.
+/// `NSTextView` que reporta o caractere clicado — só o CLIQUE, não o
+/// arrasto: sem a guarda, arrastar para selecionar disparava o salto da
+/// leitura no ponto da pressão (achado da auditoria; o PDF já filtrava
+/// deslocamento <4 pt no `ClickablePDFView`).
 final class ClickReportingTextView: NSTextView {
     var onCharacterTap: ((Int) -> Void)?
+
+    private var downPoint: NSPoint?
+    private var downChar: Int?
 
     override func mouseDown(with event: NSEvent) {
         // O ponto do evento vem em coordenadas da view; o TextKit trabalha com
         // as do container de texto, que tem inset próprio. A conversão
         // janela→view independe da rolagem (só muda o trecho visível).
+        downPoint = event.locationInWindow
         let pointInContainer = convert(event.locationInWindow, from: nil)
         if let manager = layoutManager, let container = textContainer {
             let glyph = manager.glyphIndex(for: pointInContainer, in: container)
-            onCharacterTap?(manager.characterIndexForGlyph(at: glyph))
+            downChar = manager.characterIndexForGlyph(at: glyph)
+        } else {
+            downChar = nil
         }
         super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let upPoint = event.locationInWindow
+        super.mouseUp(with: event)
+        defer {
+            downPoint = nil
+            downChar = nil
+        }
+        guard let downPoint, let downChar,
+              hypot(upPoint.x - downPoint.x, upPoint.y - downPoint.y) < 4
+        else { return }
+        onCharacterTap?(downChar)
     }
 }
