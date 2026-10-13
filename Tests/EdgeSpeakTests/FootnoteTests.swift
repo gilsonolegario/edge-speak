@@ -139,4 +139,59 @@ struct FootnoteTests {
         #expect(fora.map(\.index) == [0, 1])
         #expect(fora[1].notaNumero == nil)
     }
+
+    /// Ordem crescente (técnica do archilles-scriptor): corpos fora de ordem
+    /// no arquivo ligam cada um ao seu marcador (marcadores em ordem, que
+    /// é o caso real; marcador fora de ordem não é procurado para trás).
+    @Test func ordemCrescenteLigaCadaUmAoSeu() {
+        let lista = [
+            frase(0, "sete aqui.7", pagina: 0),
+            frase(1, "nove aqui.9", pagina: 0),
+            frase(2, "9 corpo longo da nove aqui", pagina: 0),
+            frase(3, "7 corpo longo da sete aqui", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(Set(fora.map(\.index)) == [0, 1, 2, 3])
+        let pos = Dictionary(uniqueKeysWithValues: fora.enumerated().map { ($1.index, $0) })
+        #expect(pos[3] == pos[0]! + 1)
+        #expect(pos[2] == pos[1]! + 1)
+        #expect(fora[pos[3]!].notaNumero == 7)
+        #expect(fora[pos[2]!].notaNumero == 9)
+    }
+
+    /// Regressão: com dois corpos para ligar, mover o segundo não pode
+    /// deslocar a posição do primeiro (antes, a frase errada saía da lista).
+    @Test func duasLigacoesSemPerderFrase() {
+        let lista = [
+            frase(0, "sete aqui.7", pagina: 0),
+            frase(1, "enchimento um", pagina: 0),
+            frase(2, "enchimento dois", pagina: 0),
+            frase(3, "enchimento três", pagina: 0),
+            frase(4, "nove aqui.9", pagina: 0),
+            frase(5, "enchimento quatro", pagina: 0),
+            frase(6, "enchimento cinco", pagina: 0),
+            frase(7, "7 corpo longo da sete aqui", pagina: 0),
+            frase(8, "9 corpo longo da nove aqui", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(fora.count == 9)
+        #expect(Set(fora.map(\.index)) == Set(0..<9))
+        let pos = Dictionary(uniqueKeysWithValues: fora.enumerated().map { ($1.index, $0) })
+        #expect(pos[7] == pos[0]! + 1)
+        #expect(pos[8] == pos[4]! + 1)
+    }
+
+    /// Sem marcador no alcance (após o anterior), o corpo fica intacto em
+    /// vez de grudar no marcador errado.
+    @Test func semAlcanceNaoGrudaErrado() {
+        let lista = [
+            frase(0, "sete aqui.7", pagina: 0),
+            frase(1, "7 corpo longo da sete aqui", pagina: 0),
+            frase(2, "8 dias depois do evento central", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(fora.map(\.index) == [0, 1, 2])
+        #expect(fora[2].text == "8 dias depois do evento central")
+        #expect(fora[2].notaNumero == nil)
+    }
 }

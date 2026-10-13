@@ -19,7 +19,7 @@ enum TextImport {
             let page: Int?
             /// Sobrescrito vindo do extrator (bit do span ou pequeno+elevado).
             /// Marcador de nota com `sup == true` sempre vence na
-            /// `marcaAnterior`; sem ele, vale a regex textual como reserva.
+            /// `indiceMarcador`; sem ele, vale a regex textual como reserva.
             let sup: Bool
 
             /// `init` explícito (não memberwise): neste toolchain, membro
@@ -220,9 +220,9 @@ enum TextImport {
             let t = ph.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return !(t.count <= 2 && Int(t) != nil)
         }
-        struct Corpo { var pos: Int; var numero: Int; var texto: String; var frase: Phrase }
+        struct Corpo { var numero: Int; var texto: String; var frase: Phrase }
         var corpos: [Corpo] = []
-        for (pos, ph) in lista.enumerated() {
+        for ph in lista {
             guard ph.page != nil, ph.notaNumero == nil else { continue }
             let t = ph.text.drop(while: { $0.isWhitespace })
             let digitos = String(t.prefix(while: { $0.isNumber }))
@@ -231,23 +231,32 @@ enum TextImport {
             guard resto.first?.isWhitespace == true else { continue } // "12."/"12)" não é corpo
             let corpo = resto.drop(while: { $0.isWhitespace })
             guard corpo.count >= 12 else { continue }
-            corpos.append(Corpo(pos: pos, numero: n, texto: String(corpo), frase: ph))
+            corpos.append(Corpo(numero: n, texto: String(corpo), frase: ph))
         }
-        // De trás para frente: mover não desloca as posições ainda por tratar.
-        for corpo in corpos.reversed() {
-            let alvo = marcaAnterior(
+        // Ordem crescente de número (técnica do archilles-scriptor): a busca
+        // do N+1 retoma após o marcador do N — um dígito perdido nunca é
+        // substituído. Posições rederivadas a cada corpo (mover desloca):
+        // guardar posição estraga os seguintes.
+        var limite = -1
+        for corpo in corpos.sorted(by: { $0.numero < $1.numero }) {
+            guard let posAtual = lista.firstIndex(where: { $0.index == corpo.frase.index })
+            else { continue }
+            guard let idxMarcador = indiceMarcador(
                 numero: corpo.numero, pagina: corpo.frase.page,
-                ate: corpo.pos, em: lista, excluindo: corpo.pos)
-            guard let m = alvo else { continue } // sem marcador: intacto
+                atePos: posAtual, aposPos: limite, em: lista,
+                excluindoIdx: corpo.frase.index) else { continue }
+            guard let posM = lista.firstIndex(where: { $0.index == idxMarcador })
+            else { continue }
             let movida = Phrase(
                 index: corpo.frase.index, text: corpo.texto,
                 page: corpo.frase.page, rects: corpo.frase.rects,
                 words: corpo.frase.words,
                 paragraphEnd: corpo.frase.paragraphEnd,
                 notaNumero: corpo.numero)
-            lista.remove(at: corpo.pos)
-            let destino = m > corpo.pos ? m : m + 1
-            lista.insert(movida, at: destino)
+            lista.remove(at: posAtual)
+            let destino = posM > posAtual ? posM : posM + 1
+            lista.insert(movida, at: min(max(destino, 0), lista.count))
+            limite = posM > posAtual ? posM - 1 : posM
         }
         return lista
     }
@@ -259,8 +268,9 @@ enum TextImport {
     /// O sinal geométrico (`sup`) vence sempre: palavra sobrescrita com o
     /// número N é marcador mesmo sem cola textual (".7"/",7"/"o7"). A regex
     /// textual segue como reserva (via sem PyMuPDF, sem `sup`).
-    private static func marcaAnterior(
-        numero n: Int, pagina: Int?, ate pos: Int, em lista: [Phrase], excluindo: Int
+    private static func indiceMarcador(
+        numero n: Int, pagina: Int?, atePos: Int, aposPos limite: Int,
+        em lista: [Phrase], excluindoIdx: Int
     ) -> Int? {
         let ns = String(n)
         // Palavra sobrescrita cujo miolo é exatamente N ("7", "7.", ".7").
@@ -273,12 +283,15 @@ enum TextImport {
             }
         }
         if let pagina {
-            for (i, ph) in lista.enumerated() where i != excluindo && ph.page == pagina {
-                if temSup(ph) { return i }
+            for (i, ph) in lista.enumerated()
+            where i > limite && ph.index != excluindoIdx && ph.page == pagina {
+                if temSup(ph) { return ph.index }
             }
         }
-        for i in stride(from: pos - 1, through: 0, by: -1) {
-            if temSup(lista[i]) { return i }
+        if atePos - 1 >= limite + 1 {
+            for i in stride(from: atePos - 1, through: limite + 1, by: -1) {
+                if temSup(lista[i]) { return lista[i].index }
+            }
         }
         // Reserva textual (via sem PyMuPDF, sem `sup`).
         let formas = [
@@ -292,12 +305,15 @@ enum TextImport {
             return res.contains { $0.firstMatch(in: texto, options: [], range: faixa) != nil }
         }
         if let pagina {
-            for (i, ph) in lista.enumerated() where i != excluindo && ph.page == pagina {
-                if tem(ph.text) { return i }
+            for (i, ph) in lista.enumerated()
+            where i > limite && ph.index != excluindoIdx && ph.page == pagina {
+                if tem(ph.text) { return ph.index }
             }
         }
-        for i in stride(from: pos - 1, through: 0, by: -1) {
-            if tem(lista[i].text) { return i }
+        if atePos - 1 >= limite + 1 {
+            for i in stride(from: atePos - 1, through: limite + 1, by: -1) {
+                if tem(lista[i].text) { return lista[i].index }
+            }
         }
         return nil
     }
