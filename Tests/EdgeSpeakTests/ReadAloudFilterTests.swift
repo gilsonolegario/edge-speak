@@ -358,4 +358,36 @@ struct ReadAloudFilterTests {
         #expect(fala("R = ∃uT(u,o)", voz: en).contains("there exists"))
         #expect(!ReadAloudFilter.clean("R = ∃uT(u,o)").contains("exists"))
     }
+
+    // MARK: - Marcador de nota de rodapé colado (fase 1)
+
+    @Test func marcadorAposPonto() {
+        #expect(fala("o argumento.7 segue", voz: pt) == "o argumento, nota de rodapé 7, segue")
+        #expect(fala("o argumento.7 segue", voz: en) == "o argumento, footnote 7, segue")
+        #expect(fala("o argumento.1 segue", voz: pt) == "o argumento, nota de rodapé 1, segue")
+        #expect(fala("o argumento.12 segue", voz: pt) == "o argumento, nota de rodapé 12, segue")
+    }
+
+    @Test func marcadorAposVirgulaEColado() {
+        #expect(fala("a ideia,2 segue", voz: pt) == "a ideia, nota de rodapé 2, segue")
+        #expect(fala("a ideia,2 segue", voz: en) == "a ideia, footnote 2, segue")
+        // Sobrescrito perdido na extração ("hipótese¹²" vira "hipótese12").
+        #expect(fala("a hipótese12 segue", voz: pt) == "a hipótese, nota de rodapé 12, segue")
+        #expect(fala("a hipótese12 segue", voz: en) == "a hipótese, footnote 12, segue")
+    }
+
+    @Test func marcadorNaoMordeProsa() {
+        // Anos continuam por extenso em PT (nunca "nota de rodapé").
+        #expect(fala("Em 1944 acabou.", voz: pt) == "Em mil novecentos e quarenta e quatro acabou.")
+        // Decimais, figura, datas, seção, enumeração e conta passam intactos.
+        #expect(fala("vale 3.14 aqui", voz: pt) == "vale 3.14 aqui")
+        #expect(fala("vale 3,14 aqui", voz: pt) == "vale 3,14 aqui")
+        #expect(fala("ver Figura 7 aqui", voz: pt) == "ver Figura 7 aqui")
+        #expect(fala("em 7 de outubro", voz: pt) == "em 7 de outubro")
+        #expect(fala("adotado (§2).", voz: pt) == "adotado ( seção 2 ).")
+        #expect(fala("1. What Is This", voz: en) == "1. What Is This")
+        #expect(fala("O cálculo de 3 x 4 aparece.", voz: pt) == "O cálculo de 3 x 4 aparece.")
+        // Colado curto é sigla, não nota: fica como está.
+        #expect(fala("o mp3 toca", voz: pt) == "o mp3 toca")
+    }
 }

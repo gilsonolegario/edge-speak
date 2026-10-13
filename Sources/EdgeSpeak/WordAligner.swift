@@ -49,6 +49,17 @@ final class WordAligner {
     /// custo, prefere CASAR (a palavra é a mesma das duas pontas), depois
     /// pular a palavra falada (expansão), depois pular a caixa do PDF. A
     /// preferência por casar é o que mantém `the … the` na ocorrência certa.
+    ///
+    /// Desempate por contexto (±3): casar duas palavras iguais custa 0 menos
+    /// 1 por vizinha que também é igual (até 3 para cada lado, só vizinha com
+    /// letra ou dígito). Por que só ±3 e não ±1: a frase é lida contra as
+    /// palavras do PARÁGRAFO inteiro, e a frase seguinte pode repetir o mesmo
+    /// bigrama ("the laboratory" duas vezes no artigo). Pular o meio ou pular
+    /// o fim custa o mesmo, e o backtrace a partir do fim prefere a ocorrência
+    /// tardia — o amarelo ia para a frase seguinte. Com ±3, a ocorrência cuja
+    /// vizinhança continua igual ganha, e cada lado fica com a sua. O bônus só
+    /// vale para o par igual, então expansão sem caixa continua sem caixa
+    /// (trocar ainda custa mais que pular) e o cache por frase não muda.
     func alinha(faladas: [String], pdf: [Caixa]) -> [Int?] {
         let n = faladas.count
         let m = pdf.count
@@ -63,12 +74,11 @@ final class WordAligner {
         for j in 1...m { dp[0][j] = j * Self.custoPular }
         for i in 1...n {
             for j in 1...m {
-                let casar = faladasNorm[i - 1] == pdfNorm[j - 1]
-                    ? dp[i - 1][j - 1]
-                    : dp[i - 1][j - 1] + Self.custoTrocar
                 let pularFala = dp[i - 1][j] + Self.custoPular
                 let pularCaixa = dp[i][j - 1] + Self.custoPular
-                dp[i][j] = min(casar, pularFala, pularCaixa)
+                dp[i][j] = min(
+                    Self.custoCasar(faladasNorm, pdfNorm, i: i, j: j) + dp[i - 1][j - 1],
+                    pularFala, pularCaixa)
             }
         }
 
@@ -78,9 +88,9 @@ final class WordAligner {
         var j = m
         while i > 0 && j > 0 {
             let casar = faladasNorm[i - 1] == pdfNorm[j - 1]
-            let custoCasar = casar ? dp[i - 1][j - 1] : dp[i - 1][j - 1] + Self.custoTrocar
-            if dp[i][j] == custoCasar {
-                if casar { mapa[i - 1] = j - 1 }
+            let custoCasar = Self.custoCasar(faladasNorm, pdfNorm, i: i, j: j)
+            if dp[i][j] == custoCasar + dp[i - 1][j - 1] {
+                if casar, !faladasNorm[i - 1].isEmpty { mapa[i - 1] = j - 1 }
                 i -= 1
                 j -= 1
             } else if dp[i][j] == dp[i - 1][j] + Self.custoPular {
@@ -90,6 +100,28 @@ final class WordAligner {
             }
         }
         return mapa
+    }
+
+    /// Custo da diagonal em (i, j) (1-based): par diferente custa a troca;
+    /// par igual custa 0 menos o bônus de contexto (±3 vizinhas iguais).
+    private static func custoCasar(
+        _ faladas: [String], _ pdf: [String], i: Int, j: Int
+    ) -> Int {
+        guard faladas[i - 1] == pdf[j - 1], !faladas[i - 1].isEmpty else {
+            return custoTrocar
+        }
+        var bonus = 0
+        for k in 1...3 {
+            if i - 1 + k < faladas.count, j - 1 + k < pdf.count,
+               !faladas[i - 1 + k].isEmpty, faladas[i - 1 + k] == pdf[j - 1 + k] {
+                bonus += 1
+            }
+            if i - 1 - k >= 0, j - 1 - k >= 0,
+               !faladas[i - 1 - k].isEmpty, faladas[i - 1 - k] == pdf[j - 1 - k] {
+                bonus += 1
+            }
+        }
+        return -bonus
     }
 
     /// Atalho de teste: caixa da palavra `alvo` já alinhada.

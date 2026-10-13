@@ -70,6 +70,71 @@ struct WordAlignerTests {
         #expect(mapa[2] == 2)
     }
 
+    /// Caso real do artigo (Neutrality_v80, p. 5): a frase "Avery's title … the
+    /// laboratory." é lida contra as palavras do PARÁGRAFO inteiro (80 tokens
+    /// reais do extrator), e a frase seguinte contém "the laboratory" de novo.
+    /// Pular o meio ou pular o fim custa o mesmo, e o backtrace a partir do
+    /// fim prefere a ocorrência TARDIA: o 2º "the" ia para a caixa 63 em vez
+    /// da 52, e o amarelo pulava para a frase seguinte. As faladas passam pelo
+    /// `forSpeech` como no app.
+    @Test func theRepetidoNoArtigoFicaNaPropriaFrase() {
+        let aligner = WordAligner()
+        let frase = "Avery’s title named a role and left the identity of its occupant to the laboratory."
+        let faladas = ReadAloudFilter.forSpeech(frase, voice: "en-US")
+            .split(separator: " ").map(String.init)
+        #expect(faladas.count == 15)
+        let caixas = pdf([
+            "The", "two", "uses", "of", "Carnap", "assign", "different", "work", "to", "a",
+            "choice.", "The", "reconstruction", "fixes", "an", "inter-", "pretation", "under", "which", "realization",
+            "suffices", "for", "theoretical", "truth.", "The", "realist", "frame", "makes", "a", "general",
+            "existential", "commitment", "part", "of", "engaging", "in", "an", "explanatory", "practice.", "Avery’s",
+            "title", "named", "a", "role", "and", "left", "the", "identity", "of", "its",
+            "occupant", "to", "the", "laboratory.", "Whether", "either", "device", "leaves", "questions", "of",
+            "that", "kind", "where", "the", "laboratory", "found", "them", "depends", "on", "how",
+            "theoretical", "terms", "are", "understood,", "and", "Carnap", "himself", "marked", "the", "difference.",
+        ])
+        let mapa = aligner.alinha(faladas: faladas, pdf: caixas)
+        for i in 0..<13 {
+            #expect(mapa[i] == 39 + i, "palavra \(faladas[i]) devia estar na caixa \(39 + i)")
+        }
+        #expect(mapa[13] == 52)
+        #expect(mapa[14] == 53)
+    }
+
+    /// Espelho do caso do artigo: a frase seguinte ("… where the laboratory
+    /// found them …") casa o "the laboratory" na SUA ocorrência (63–64), não
+    /// na anterior (52–53). Trava o outro lado: o contexto não pode empurrar
+    /// tudo para a primeira ocorrência.
+    @Test func fraseSeguinteCasaNaPropriaOcorrencia() {
+        let aligner = WordAligner()
+        let frase = "Whether either device leaves questions of that kind where the laboratory found them depends on how theoretical terms are understood, and Carnap himself marked the difference."
+        let faladas = ReadAloudFilter.forSpeech(frase, voice: "en-US")
+            .split(separator: " ").map(String.init)
+        #expect(faladas.count == 26)
+        let caixas = pdf([
+            "The", "two", "uses", "of", "Carnap", "assign", "different", "work", "to", "a",
+            "choice.", "The", "reconstruction", "fixes", "an", "inter-", "pretation", "under", "which", "realization",
+            "suffices", "for", "theoretical", "truth.", "The", "realist", "frame", "makes", "a", "general",
+            "existential", "commitment", "part", "of", "engaging", "in", "an", "explanatory", "practice.", "Avery’s",
+            "title", "named", "a", "role", "and", "left", "the", "identity", "of", "its",
+            "occupant", "to", "the", "laboratory.", "Whether", "either", "device", "leaves", "questions", "of",
+            "that", "kind", "where", "the", "laboratory", "found", "them", "depends", "on", "how",
+            "theoretical", "terms", "are", "understood,", "and", "Carnap", "himself", "marked", "the", "difference.",
+        ])
+        let mapa = aligner.alinha(faladas: faladas, pdf: caixas)
+        #expect(mapa == Array(54..<80).map { Optional($0) })
+    }
+
+    /// Expansão antes de repetidas: a palavra que não existe no PDF continua
+    /// sem caixa mesmo com o bônus de contexto (só o par igual ganha bônus).
+    @Test func expansaoAntesDeRepetidaNaoRoubaCaixa() {
+        let aligner = WordAligner()
+        let mapa = aligner.alinha(
+            faladas: ["oh", "the", "role", "the", "test"],
+            pdf: pdf(["the", "role", "the", "test"]))
+        #expect(mapa == [nil, 0, 1, 2, 3])
+    }
+
     /// A caixa da palavra alvo sai do mapa; sem correspondência, nil (nunca
     /// uma caixa vizinha inventada).
     @Test func caixaDoAlvo() {

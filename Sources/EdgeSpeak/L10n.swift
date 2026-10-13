@@ -134,6 +134,8 @@ enum L {
         "settings.languageLabel": "Idioma",
         // Cadência (EdgeTTS.Rate).
         "rate.normal": "Normal",
+        // Fala (ReadAloudFilter.expandFootnoteMarkers).
+        "speech.footnote": "nota de rodapé {0}",
         // Nome padrão no painel de exportação (SpeechController).
         "export.defaultWav": "leitura.wav",
         "export.defaultMp3": "leitura.mp3",
@@ -318,6 +320,8 @@ enum L {
         "settings.noAdvanced": "No advanced options available right now.",
         "settings.languageLabel": "Language",
         "rate.normal": "Normal",
+        // Speech (ReadAloudFilter.expandFootnoteMarkers).
+        "speech.footnote": "footnote {0}",
         "export.defaultWav": "reading.wav",
         "export.defaultMp3": "reading.mp3",
         "progress.chunkFraction": "Synthesizing {0}/{1}…",

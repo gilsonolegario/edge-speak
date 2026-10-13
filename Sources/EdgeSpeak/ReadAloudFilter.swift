@@ -192,6 +192,7 @@ enum ReadAloudFilter {
         // já lê "1944" como "nineteen forty-four" sozinho.
         if pt { out = spellOutYears(out) }
         out = expandLogic(out, portuguese: pt)
+        out = expandFootnoteMarkers(out, portuguese: pt)
         // As expansões podem duplicar espaços e vírgulas, ou colar vírgula
         // no próximo símbolo ("x,(W"). Ordem: primeiro colapsa, depois espaça.
         out = out.replacingOccurrences(of: "[ ]{2,}", with: " ", options: .regularExpression)
@@ -206,6 +207,51 @@ enum ReadAloudFilter {
     static func isPortugueseVoice(_ voice: String) -> Bool {
         let v = voice.lowercased()
         return v.hasPrefix("pt") || v.contains("ptbr") || v.contains("pt-br")
+    }
+
+    /// Marcador de nota de rodapé colado ao texto ("argumento.7", "ideia,2",
+    /// "hipótese12"): vira "nota de rodapé 7"/"footnote 7" no idioma da voz.
+    ///
+    /// Por que textual aqui: o `clean` já remove o sobrescrito Unicode antes
+    /// de repartir as frases, então o que chega ao `forSpeech` é o dígito
+    /// ASCII colado (o NFKC também funde "texto⁷" em "texto7"). A geometria
+    /// (dígito pequeno e elevado nas caixas de `Phrase.WordBox`) distinguiria
+    /// melhor o colado de "mp3", mas o `forSpeech` só recebe texto e voz —
+    /// passar as caixas exigiria mexer nos chamadores (fora do escopo da
+    /// fase 1). Na dúvida entre anunciar e calar, esta regra CALA: o colado
+    /// de 1 dígito ("voz1", "mp3") fica como está; só o colado de 2 dígitos
+    /// em palavra de 3+ letras minúsculas vira anúncio ("palavra12").
+    /// Guarda forte comum: 1–2 dígitos (nunca 4, para não morder os anos
+    /// 1500–2100 que o `spellOutYears` trata) e o dígito seguinte não pode
+    /// ser letra, dígito nem ponto (protege "3.14", "3,14", "4.2.1" e "7z").
+    /// O ponto e a vírgula exigem letra ou fecho antes (protegem "9 Oct",
+    /// "Figura 7" e "1." de início de linha); o "3 x 4" não tem ponto nem
+    /// dígito colado e passa intacto. O texto vem do catálogo `L`
+    /// ("speech.footnote"), fonte única nos dois idiomas.
+    private static func expandFootnoteMarkers(_ text: String, portuguese pt: Bool) -> String {
+        let molde = L.get("speech.footnote", locale: pt ? .pt : .en)
+        let marca1 = molde.replacingOccurrences(of: "{0}", with: "$1")
+        let marca2 = molde.replacingOccurrences(of: "{0}", with: "$2")
+        let regras: [(String, String)] = [
+            // ".7" após letra ou fecho: "argumento.7" (não "3.14", que tem
+            // dígito antes, nem ".5" solto, que tem espaço antes).
+            (#"(?<=[A-Za-zÀ-ÿ\)\]"'”’])\.(\d{1,2})(?![\dA-Za-zÀ-ÿ.])"#, ", \(marca1),"),
+            // ",2" após letra ou fecho: "ideia,2" (não "3,14", que tem
+            // dígito antes).
+            (#"(?<=[A-Za-zÀ-ÿ\)\]"'”’]),(\d{1,2})(?![\dA-Za-zÀ-ÿ.])"#, ", \(marca1),"),
+            // Colado de 2 dígitos em palavra de 3+ letras minúsculas:
+            // "palavra12" (não "mp3"/"B2", curtos, nem "abc123", longo).
+            (#"([A-Za-zÀ-ÿ]{2,}[a-zà-ÿ])(\d{1,2})(?![\dA-Za-zÀ-ÿ.])"#, "$1, \(marca2),"),
+        ]
+        var out = text
+        for (padrao, modelo) in regras {
+            guard let re = try? NSRegularExpression(pattern: padrao) else { continue }
+            out = re.stringByReplacingMatches(
+                in: out, options: [],
+                range: NSRange(out.startIndex..., in: out),
+                withTemplate: modelo)
+        }
+        return out
     }
 
     /// Conjuntos blackboard-bold, que o NFKC funde com ASCII e por isso saem
