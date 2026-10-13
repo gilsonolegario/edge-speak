@@ -1,90 +1,175 @@
+<img src="Resources/Icon-1024.png" alt="App icon" width="128">
+
 # EdgeSpeak
 
-Leitor de PDF e texto com leitura em voz alta em fluxo, para macOS (SwiftUI, macOS 14+). Cada fatia sintetizada começa a tocar assim que fica pronta, sem esperar o documento inteiro — num PDF de 300 páginas a voz entra em segundos. A frase em leitura fica destacada no PDF e no painel de texto; com voz online, a palavra em leitura também é destacada (karaokê).
+A native macOS app that reads PDFs and text aloud while it highlights what it is
+reading. Synthesis streams in slices, so audio starts in seconds instead of waiting
+for the whole document, and the sentence being spoken is highlighted in the PDF. With
+an online voice the word being read is highlighted too. Native SwiftUI, macOS 14+.
 
-Estado: em desenvolvimento ativo, com 111 testes em 13 suítes verdes. O contrato técnico entre camadas (arquivos, funções e regras) está no INTERFACE.md; créditos e licenças de terceiros, no CREDITS.md.
+![Swift](https://img.shields.io/badge/Swift-6-FA7343?logo=swift&logoColor=white&style=flat)
+![macOS](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white&style=flat)
+![arch](https://img.shields.io/badge/arch-arm64-blueviolet?style=flat)
+![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat)
+![Version](https://img.shields.io/badge/version-0.1.0-FF9F1C?style=flat)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/gilsonolegario)
 
-## Motores de voz
+## Download
 
-Duas vozes no mesmo transporte; a troca é pelo seletor na toolbar ou na aba Leitura dos Ajustes.
+Grab the latest pre-built app from the [Releases page](https://github.com/gilsonolegario/edge-speak/releases) — or build it locally:
 
-- **Online (edge-tts)**: vozes neurais da Microsoft, exige rede. Devolve tempos por palavra — por isso só aqui existe o destaque palavra a palavra. Se o serviço recusar (como no bloqueio global do endpoint antigo em 10/10/2026), o app diz isso com honestidade e sugere a voz offline, em vez de repetir em vão.
-- **Offline (Piper)**: síntese local, uma frase por vez, sem tempos de palavra. Há destaque da frase, sem karaokê. As vozes embutidas (Faber em português, Lessac em inglês) aparecem em seção própria do seletor; crédito e licença (GPL-3.0) no CREDITS.md.
-
-## Leitura e destaque
-
-- **Azul por frase**: uma anotação de destaque por caixa de linha da frase — nunca o parágrafo. As caixas vêm do extrator, em ordem de leitura, com reserva para o parágrafo quando a frase não casa.
-- **Amarelo por palavra** (só online): alinhamento global entre a sequência falada e a sequência do PDF. Onde o PDF põe símbolo e a voz põe frase ("∃uT (u,o)" vira "there exists u, such that, T of u"), a palavra de expansão fica **sem caixa** em vez de roubar a de prosa adiante — era isso que fazia o amarelo pular de lado a lado. Repetidas resolvem por contexto (±3), não pela primeira ocorrência.
-- **Rolagem**: o seguimento automático pode ser desligado — a rolagem manual sempre vence. Com ele desligado, o botão "Ir para o trecho" volta ao ponto da leitura. Clicar numa frase **toca a partir dela**: sem áudio ainda, a síntese começa na frase clicada (não do início); com áudio, o salto vai direto à fatia, sem depender de durações ainda não medidas; o PDF acompanha na hora.
-- **Transcrição**: modo filtrado (limpa cabeçalhos, hifenização, bibliografia) ou integral ("Texto integral" nos Ajustes). Trocar o modo descarta a transcrição e recomeça; "Gerar leitura nova" (menu Opções) força síntese nova. O áudio fica em cache em disco com chave por texto+voz+cadência: reabrir o mesmo documento reaproveita sem rede.
-- **Notas de rodapé** (ligado por padrão): o marcador colado ("argumento.7") é anunciado ("nota de rodapé 7") e o corpo da nota é lido logo em seguida — o importador o move para depois da frase do marcador, sem mudar os índices das demais frases. A opção "Ler notas de rodapé" (Ajustes → Texto) desliga tudo: o marcador vira pausa e os corpos saem da leitura. Limite honesto: em PDF cuja camada de texto não traz o corpo da nota, só o marcador é anunciado — a ligação marcador↔corpo está pronta e coberta por testes, mas depende do que o extrator encontrar.
-
-## Fórmulas lógicas
-
-O filtro fala (`ReadAloudFilter`) expande a notação no idioma da voz, com as pausas que a leitura em aula usa — pausa curta antes/depois de ⊢/⊨, pausa antes de ∴/∵, vírgula prosódica após a variável do quantificador e no "tal que". Cobertura (EN/PT):
-
-- Quantificadores ∀ ∃ ∃! com variável ("para todo x,", "existe x, tal que,"), modais □ ◇ ("necessariamente", "possivelmente"), turnos ⊢ ⊨ e negações ⊬ ⊭, ASCII `|-` `|=` `->` `=>` `<->`.
-- Conjuntos ∈ ∉ ⊆ ∪ ∩ ∖ ∅ ℘, construtor `{x | φ}` / `{x : φ}` ("o conjunto de x, tal que,"), ferradura ⊃ por contexto (entre conjuntos é superconjunto, entre fórmulas é condicional).
-- Gregas pelo nome (φ "fi", λ, Γ…), blackboard-bold ℕ ℤ ℚ ℝ ℂ, iota ℩ ("o x tal que"), cantos de Quine (silêncio com pausa de menção), primos p′ ("p linha"), §2 ("seção 2"), functores ("T de u, o"), R_H ("R H").
-- Comparações `<=` `>=` `!=` `<>` `/=`, identidade, ⊥/⊤ ("falso"/"verdadeiro" em PT).
-- **Silêncio deliberado**: `[]`/`<>` como modal, `x` de "3 x 4" como vezes, barra solta fora de construtor e chave de agrupamento nunca viram palavra — em prosa comum, verbalizar estragaria a frase.
-
-Limite conhecido: a qualidade depende da camada de texto do PDF; símbolo que chega como imagem não é lido.
-
-## Interface
-
-Desenho do IINA. Toolbar no topo (Abrir, seletor de voz, menu Opções com seguir-leitura, fonte, "Gerar leitura nova" e Ajustes). Conteúdo: o PDF, ou o painel de texto clicável. Na base, barra flutuante sempre visível: interromper/cancelar síntese, ±15 s, play/pausa, tempo + trilho arrastável, volume e exportação do áudio (WAV/MP3).
-
-Atalhos: Enter alterna play/pausa; Espaço faz o mesmo fora do editor e do PDF; ⌥←/⌥→ pulam 15 s; ⌘. interrompe a síntese.
-
-Ajustes (⌘,) em três abas: **Leitura** (voz, ritmo, seguir leitura, idioma PT/EN), **Texto** (fonte, texto integral, ler notas de rodapé) e **Avançado** (tamanho do cache em disco e botão de limpeza). Tudo persiste entre sessões. A interface existe nos dois idiomas com troca na hora (catálogo compilado, padrão PT); nomes de voz e mensagens de progresso dos motores seguem no idioma de origem.
-
-Arquivos abrem pelo botão Abrir (PDF, Markdown, texto), por duplo-clique com "Abrir com o EdgeSpeak", por arraste ao ícone e por argumento de linha de comando.
-
-## Instalar o app pronto
-
-O release mais recente fica na aba [Releases](https://github.com/gilsonolegario/edge-speak/releases) do repositório. Baixe o arquivo `EdgeSpeak-vX.Y.Z-macos-arm64.zip`, descompacte com duplo clique e arraste `EdgeSpeak.app` para a pasta **Aplicativos**. Requer macOS 14 ou mais novo e Mac com chip Apple Silicon (arm64).
-
-O app é assinado localmente, sem notarização, então na primeira abertura o macOS avisa que o desenvolvedor não é identificado. Para abrir: clique com o botão direito no ícone → **Abrir** → **Abrir**. Alternativa pelo Terminal, uma vez só:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/EdgeSpeak.app
+```bash
+./build-app.sh    # macOS 14+ → EdgeSpeak.app (~280 MB, self-contained)
 ```
 
-Para atualizar, baixe o zip do release mais novo e substitua o app na pasta Aplicativos.
+or run straight from the source tree (development mode; the bundled Python and voices are only packed by `build-app.sh`):
 
-## Compilar, testar, empacotar
+```bash
+swift run EdgeSpeak
+```
 
-Pré-requisito: macOS 14+ e SwiftPM (o app só é montado e testado em Mac moderno).
+`build-app.sh` downloads a standalone Python base, the wheels and the Piper voices at build time and packs everything into the `.app`. See [First launch](#first-launch) for how to open the pre-built download the first time.
 
-```sh
+## First launch
+
+The release download is **not notarized** — notarization requires a paid Apple
+Developer account — so macOS blocks the first launch.
+
+On macOS 15 (Sequoia) and later the old right-click → Open bypass is **gone**; use
+this flow instead:
+
+1. Double-click `EdgeSpeak.app` → the dialog says it can't be opened → click **Done**.
+2. Open **System Settings → Privacy & Security → Security** (scroll to the bottom).
+3. Under "Allow applications from", find *"EdgeSpeak was blocked to protect your Mac"* → click **Open Anyway** → confirm with your password.
+4. Launch EdgeSpeak normally from now on.
+
+On macOS 14 (Sonoma) you can still right-click the app → **Open** → **Open**.
+
+> **Tip:** `Open Anyway` only appears for ~1 hour after the blocked launch. If you don't see it, double-click the app once more and go straight back to System Settings.
+>
+> **Troubleshooting:** if macOS claims the app is "damaged", remove the quarantine attribute once:
+>
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/EdgeSpeak.app
+> ```
+
+**Prefer to skip all of this?** Build locally — a `swift build` output never receives the quarantine attribute, so Gatekeeper stays out of the way (requires the Xcode Command Line Tools; the build script fetches the Python runtime and the voices).
+
+## Major features
+
+- **Streaming playback** — audio plays as each slice is synthesized; a 300-page PDF starts speaking in seconds.
+- **Sentence highlighting in the PDF** — one highlight annotation per line box of the sentence, never the whole paragraph.
+- **Word highlighting (karaoke)** — the online voice returns per-word timings, so the word being read is highlighted too.
+- **Click to read from a sentence** — click any sentence in the PDF to start, or jump, the reading right there.
+- **Footnotes** — a glued marker ("argument.7") is announced ("footnote 7") and the note body is read right after it; the *Read footnotes* option turns the whole thing off.
+- **Two voices, one transport** — online (Microsoft neural, needs a network) or offline (Piper, local, no network).
+- **Logic formulas spoken** — `∀`, `∃`, `⊢`, `∈`, `ℕ` … are expanded into words, with the pauses a classroom reading uses.
+- **Filtered or full text** — strip headers, hyphenation and the bibliography, or read the document verbatim.
+- **Audio export** — write the reading out as WAV or MP3.
+- **No daemons, no telemetry** — nothing runs in the background and nothing is installed outside your home folder.
+
+## Voices
+
+Two voices in the same transport; switch from the toolbar selector or Settings → Reading.
+
+- **Online (edge-tts)** — Microsoft neural voices, needs a network. Returns per-word timings, which is why word-level highlighting exists only here. If the service refuses, the app says so and suggests the offline voice instead of retrying in vain.
+- **Offline (Piper)** — local synthesis, one sentence at a time, no word timings, so sentence highlighting only. Two voices ship inside the app: Faber (Portuguese) and Lessac (English). Credit and license (GPL-3.0) in [CREDITS.md](CREDITS.md).
+
+## Reading and highlighting
+
+- **Blue per sentence**: one highlight annotation per line box of the sentence — never the paragraph. Boxes come from the extractor in reading order, falling back to the paragraph when the sentence does not match.
+- **Yellow per word** (online only): a global alignment between the spoken sequence and the PDF sequence. Where the PDF has a symbol and the voice has a phrase ("∃uT (u,o)" → "there exists u, such that, T of u"), the expansion word gets **no box** instead of stealing a later prose box — that is what used to make the yellow jump side to side. Repeated words resolve by context (±3), not by the first occurrence.
+- **Scrolling**: automatic follow can be turned off, and manual scrolling always wins. With follow off, the **Go to passage** button returns to the reading point. Clicking a sentence **plays from it**: with no audio yet, synthesis starts at the clicked sentence instead of the beginning; with audio, the jump goes straight to the slice, without waiting for timings not yet measured.
+- **Footnotes** (on by default): the glued marker ("argument.7") is announced ("footnote 7") and the body is read right after — the importer moves it to after the marker's sentence without changing the other sentences' indices. Honest limit: in a PDF whose text layer does not carry the note body, only the marker is announced.
+
+## Logic formulas
+
+The spoken filter (`ReadAloudFilter`) expands the notation in the voice's language, with the pauses a classroom reading uses. Coverage (EN/PT):
+
+- Quantifiers ∀ ∃ ∃! with a variable, modals □ ◇, turnstiles ⊢ ⊨ and negations ⊬ ⊭, ASCII `|-` `|=` `->` `=>` `<->`.
+- Sets ∈ ∉ ⊆ ∪ ∩ ∖ ∅ ℘, set-builder `{x | φ}` / `{x : φ}`, horseshoe ⊃ by context (superset between sets, conditional between formulas).
+- Greek by name, blackboard-bold ℕ ℤ ℚ ℝ ℂ, iota ℩, Quine corners, primes p′ ("p prime"), §2 ("section 2"), functors ("T of u, o"), R_H.
+- Comparisons `<=` `>=` `!=` `<>` `/=`, identity, ⊥/⊤.
+- **Deliberate silence**: `[]`/`<>` as a modal, `x` in "3 x 4" as "times", a lone bar outside a set-builder — verbalizing them would break ordinary prose.
+
+Known limit: quality depends on the PDF text layer; a symbol that arrives as an image is not read.
+
+## How to install and use the app
+
+1. Download `EdgeSpeak-vX.Y.Z-macos-arm64.zip` from the [Releases page](https://github.com/gilsonolegario/edge-speak/releases) and unzip it.
+2. Drag `EdgeSpeak.app` to your Applications folder.
+3. Open it. If macOS blocks it, follow [First launch](#first-launch).
+4. Click **Open** in the toolbar and pick a PDF, Markdown or text file — or drop a file onto the icon.
+5. Press **Enter** to play/pause. The sentence being read is highlighted in the PDF.
+6. Click any sentence in the PDF to read from there.
+7. Open **Settings (⌘,)** to choose the voice, rate, follow mode and interface language.
+
+### Shortcuts
+
+| Key | Action |
+|---|---|
+| Enter | Play / pause |
+| Space | Play / pause (outside the editor and the PDF) |
+| ⌥← / ⌥→ | Jump 15 s back / forward |
+| ⌘. | Stop synthesis |
+
+## macOS compatibility
+
+| Version | Notes |
+|---|---|
+| macOS 14 (Sonoma) | supported |
+| macOS 15 (Sequoia) | supported |
+
+The pre-built download is `arm64` (Apple Silicon) only.
+
+## Settings
+
+Three tabs:
+
+- **Reading** — voice, rate, follow the reading, PT/EN interface language.
+- **Text** — typeface, full text, read footnotes.
+- **Advanced** — on-disk cache size and a clear button.
+
+Everything persists between sessions. The interface is available in Portuguese and English, switched on the fly (Portuguese by default).
+
+## Build
+
+Requires macOS 14+ and the Swift toolchain (SwiftPM).
+
+```bash
 swift build
 swift test
-./build-app.sh   # gera EdgeSpeak.app (~280 MB) na raiz do projeto
+./build-app.sh   # → EdgeSpeak.app (~280 MB) at the project root
 ```
 
-O `build-app.sh` baixa a base Python, os wheels e as vozes **na hora do build** e monta o `.app` com tudo dentro (detalhes no cabeçalho do script); o venv é preparado no primeiro uso do app, em `Application Support/EdgeSpeak`, a partir do que viaja no bundle. O áudio em cache mora em `Caches/EdgeSpeak`. Nada é instalado como daemon e nada roda em fundo.
+`build-app.sh` downloads the Python base, the wheels and the voices **at build time** and packs the `.app` with everything inside (details in the script header). On first run the app prepares a Python venv in `Application Support/EdgeSpeak` from what ships in the bundle; cached audio lives in `Caches/EdgeSpeak`. Nothing is installed as a daemon and nothing runs in the background.
 
-O que nunca entra no repositório (`.gitignore`): `.build/`, `Build/` (staging com base Python, wheels e vozes, ~490 MB), `EdgeSpeak.app/`, `DerivedData/`, `.swiftpm/`, venvs (`.venv/`, `venv/`, `__pycache__/`), `.DS_Store`, `.scratch/`, `NOTAS_SESSAO.md`, `PROXIMA_SESSAO.md`, `*.log` e metadados de editor (`xcuserdata/`, `.idea/`, `.vscode/`).
+The package builds one target, `EdgeSpeak`, from `Sources/EdgeSpeak/`; tests are in `Tests/EdgeSpeakTests/` (swift-testing, `@Test`/`#expect`).
 
-## Licenças de terceiros
+## Pricing
 
-Piper (voz offline, GPL-3.0) e PyMuPDF (extração, AGPL) viajam com o app — ver CREDITS.md. O código próprio está sob GPL-3.0 (LICENSE), que cobre a combinação com esses componentes no artefato montado.
+EdgeSpeak is free and always will be. No license keys, no accounts, no telemetry.
 
-## Limites conhecidos (2026-10-13)
+## Documentation
 
-- Os primeiros segundos de áudio podem tocar sem destaque no PDF — causa ainda não isolada (a fatia chega e toca antes de o destaque assentar; reprodutível mas não explicada).
-- Corpos de nota de rodapé em PDFs cuja camada de texto não os traz (como o artigo de teste): o marcador é anunciado, o corpo não existe para ser lido. O pipeline de ligação marcador↔corpo está pronto e testado com listas sintéticas.
-- Voz online depende do endpoint da Microsoft; indisponibilidade global aparece como mensagem, não como travamento.
+- **Layer-by-layer contract** (files, functions and rules) — [INTERFACE.md](INTERFACE.md)
+- **Third-party credits and licenses** — [CREDITS.md](CREDITS.md)
+- **Research notes** (PyMuPDF, PDF types, OSS survey, audits) — [docs/pesquisas/](docs/pesquisas/)
 
-## Melhorias futuras sugeridas
+## History
 
-- Notas de rodapé por geometria: hoje a ligação marcador↔corpo é textual (regex sobre o texto); detectar o marcador pela caixa (superscript pequeno e elevado) distinguiria melhor o colado de "mp3".
-- Dicionário de pronúncia do usuário (nomes próprios, siglas do orientador).
-- Posições de leitura persistidas por documento (retomar onde parou).
-- Fila de documentos e exportação com tempos (p. ex. legenda/WebVTT) para revisão.
-- Gerenciador de vozes offline (baixar/apagar sem rebuild).
-- Modo ditado (verbalizar parênteses) para revisão de fórmulas símbolo a símbolo.
-- Restauração de sessão (reabrir o documento que estava aberto) e auditoria VoiceOver completa.
-- Desempenho medido em PDFs de 300+ páginas (tempo até a primeira fatia por tamanho).
-- Alinhamento forçado offline (Montreal Forced Aligner, MIT) para karaokê por palavra com voz Piper — caminho pesquisado, sem integração ainda.
+**0.1.0** — First release: streaming synthesis with sentence and word highlighting, click-to-read from a sentence, footnote markers announced with the body linked right after, logic-formula expansion, PT/EN interface, three-tab Settings, audio export and per-document resume.
+
+## Known limits
+
+- The first seconds of audio may play without a highlight in the PDF — cause not yet isolated (the slice arrives and plays before the highlight settles; reproducible but not explained).
+- Footnote bodies in PDFs whose text layer does not carry them (such as the test article): the marker is announced, the body does not exist to be read.
+- The online voice depends on the Microsoft endpoint; an outage shows up as a message, not a freeze.
+
+## License
+
+EdgeSpeak is released under the [GPL-3.0 License](LICENSE). Piper (GPL-3.0) and PyMuPDF (AGPL) ship with the app — see [CREDITS.md](CREDITS.md).
+
+---
+
+Built with [opencode](https://opencode.ai) — the open-source AI coding agent.
