@@ -174,7 +174,10 @@ final class SpeechController: ObservableObject {
     }
 
     /// Lê a lista ativa de frases (já filtrada ou integral, a escolha é da UI).
-    func play(phrases list: [TextImport.Phrase], voice: String, rate: EdgeTTS.Rate = .normal) {
+    /// - `lêNotas`: com `false`, marcadores de nota viram pausa e corpos
+    /// ficam fora da lista (a ContentView filtra); entra na chave do cache,
+    /// porque o áudio é outro.
+    func play(phrases list: [TextImport.Phrase], voice: String, rate: EdgeTTS.Rate = .normal, lêNotas: Bool = true) {
         let trimmed = list.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard !trimmed.isEmpty else {
             mostra("status.noText")
@@ -187,7 +190,7 @@ final class SpeechController: ObservableObject {
             if idx > 0 { fullText += trimmed[idx - 1].paragraphEnd ? "\n" : " " }
             fullText += ph.text
         }
-        let key = CacheDisco.key(text: fullText, voice: voice, rate: rate)
+        let key = CacheDisco.key(text: fullText, voice: voice, rate: rate, lêNotas: lêNotas)
         let sameInput = currentKey == key
         // Só retoma se for a MESMA lista, voz e cadência. Sem esta checagem,
         // carregar outro arquivo durante a pausa e apertar Play tocava a
@@ -197,6 +200,21 @@ final class SpeechController: ObservableObject {
             isPlaying = true
             isPaused = false
             mostra("status.playing")
+            return
+        }
+        // Pausado com a síntese da MESMA leitura ainda em curso (a primeira
+        // fatia não chegou ou a fila esvaziou): retoma o que há e o resto
+        // engata ao chegar. Antes caía no no-op da síntese em voo e o Play
+        // parecia morto (achado da auditoria).
+        if streamer.isPaused, isBusy, let inflight = synthKeyInFlight, inflight == key {
+            streamer.resume()
+            isPlaying = streamer.isPlaying
+            isPaused = streamer.isPaused
+            if streamer.isPlaying {
+                mostra("status.playingWhileSynthesizing")
+            } else {
+                mostra("status.generatingNext")
+            }
             return
         }
         // Já tocando o mesmo conteúdo: nada a fazer.
@@ -274,6 +292,7 @@ final class SpeechController: ObservableObject {
                     phrases: trimmed,
                     voice: voice,
                     rate: rate,
+                    lêNotas: lêNotas,
                     shouldCancel: { flag.isCancelled },
                     progress: { msg in
                         Task { @MainActor in
@@ -292,6 +311,7 @@ final class SpeechController: ObservableObject {
                     voice: voice,
                     maxChars: 1800,
                     rate: rate,
+                    lêNotas: lêNotas,
                     shouldCancel: { flag.isCancelled },
                     progress: { msg in
                         Task { @MainActor in
@@ -369,6 +389,9 @@ final class SpeechController: ObservableObject {
                         guard gen == self.synthGeneration else { return }
                         self.isBusy = false
                         self.synthKeyInFlight = nil
+                        // Pulo pendente morre com a síntese: sem isto, um
+                        // clique anterior disparava sozinho numa leitura futura.
+                        self.pendingJumpIndex = nil
                         let (chaveFalha, argsFalha) = SpeechController.failureKey(for: error)
                         self.defineStatus(chave: chaveFalha, args: argsFalha)
                     }
@@ -393,9 +416,16 @@ final class SpeechController: ObservableObject {
                     // leitura futura com outra lista.
                     self.pendingJumpIndex = nil
                     // Guarda em disco: a próxima abertura igual toca sem rede.
-                    CacheDisco.store(
-                        key: key, audioURL: finalResult.audioURL,
-                        segments: finalResult.segments)
+                    // Guarda em disco fora da main: copiar o MP3/WAV final aqui
+                    // dentro congelava a UI no fim da síntese (achado da auditoria).
+                    let chaveCache = key
+                    let audioCache = finalResult.audioURL
+                    let segmentosCache = finalResult.segments
+                    Task.detached(priority: .utility) {
+                        CacheDisco.store(
+                            key: chaveCache, audioURL: audioCache,
+                            segments: segmentosCache)
+                    }
                     if self.streamer.isQueueExhausted {
                         self.isPlaying = false
                         self.isPaused = false

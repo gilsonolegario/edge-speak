@@ -115,7 +115,6 @@ func markSynthesisComplete()
 func seek(to globalTime: TimeInterval)
 func seek(toSegment index: Int) -> Bool
 func jumpToSegment(_ index: Int) -> Bool
-func timeForSegment(index: Int) -> TimeInterval?
 func pause() / resume() / stop() / play() / restart(audioURL:segments:)
 ```
 
@@ -391,8 +390,8 @@ só como `@State` da sessão).
 ## Testes (`Tests/EdgeSpeakTests/`)
 
 Suítes em swift-testing (`@Test`/`#expect`, não XCTest).
-`swift test` reporta **37 testes em 6 suítes** (conferido
-em 2026-10-13):
+`swift test` reporta **80 testes em 9 suítes** (conferido
+em 2026-10-13; era 37/6 antes das fases de fórmulas, tradução e alinhamento):
 
 - `ReadAloudFilterTests` (14) — `forSpeech` por símbolo e
   idioma, com a expansão de notação lógica (modal, conjuntos,

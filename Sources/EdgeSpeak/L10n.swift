@@ -130,6 +130,8 @@ enum L {
         "settings.integralText": "Texto integral",
         "help.integralHelp": "Lê o texto corrido, sem filtrar repetições e cabeçalhos",
         "settings.integralNote": "Trocar o modo descarta a transcrição atual e reinicia a leitura.",
+        "settings.footnotes": "Ler notas de rodapé",
+        "help.footnotesHelp": "Anuncia o marcador e lê o corpo a seguir; desligado, a nota vira pausa",
         "settings.noAdvanced": "Nenhuma opção avançada disponível no momento.",
         "settings.languageLabel": "Idioma",
         // Cadência (EdgeTTS.Rate).
@@ -317,6 +319,8 @@ enum L {
         "settings.integralText": "Full text",
         "help.integralHelp": "Reads the full text, without filtering repetitions and headers",
         "settings.integralNote": "Switching modes discards the current transcription and restarts reading.",
+        "settings.footnotes": "Read footnotes",
+        "help.footnotesHelp": "Announces the marker and reads the body next; off turns notes into pauses",
         "settings.noAdvanced": "No advanced options available right now.",
         "settings.languageLabel": "Language",
         "rate.normal": "Normal",

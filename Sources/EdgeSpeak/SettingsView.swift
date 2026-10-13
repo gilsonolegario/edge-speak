@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage(AppSetting.rateKey) private var ratePercent: Int = AppSetting.rateDefault
     @AppStorage(AppSetting.followKey) private var followReading: Bool = AppSetting.followDefault
     @AppStorage(AppSetting.integralKey) private var integralMode: Bool = AppSetting.integralDefault
+    @AppStorage(AppSetting.footnoteKey) private var lêNotas: Bool = AppSetting.footnoteDefault
     @AppStorage(AppSetting.fontKey) private var fontSize: Double = AppSetting.fontDefault
 
     /// Idioma da interface (PT padrão); os rótulos saem do catálogo `L`.
@@ -89,6 +90,8 @@ struct SettingsView: View {
             Text(L.get("settings.integralNote", locale: idioma))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+            Toggle(L.get("settings.footnotes", locale: idioma), isOn: $lêNotas)
+                .help(L.get("help.footnotesHelp", locale: idioma))
         }
         .formStyle(.grouped)
         .padding()

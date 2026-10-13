@@ -463,6 +463,7 @@ enum PiperTTS {
         phrases: [TextImport.Phrase],
         voice: String,
         rate: EdgeTTS.Rate = .normal,
+        lêNotas: Bool = true,
         shouldCancel: @escaping () -> Bool = { false },
         progress: @escaping (String) -> Void
     ) -> AsyncThrowingStream<EdgeTTS.ChunkDelivery, Error> {
@@ -471,6 +472,7 @@ enum PiperTTS {
                 do {
                     let final = try await runStreaming(
                         phrases: phrases, voice: voice, rate: rate,
+                        lêNotas: lêNotas,
                         shouldCancel: shouldCancel, progress: progress,
                         onChunk: { continuation.yield($0) }
                     )
@@ -488,6 +490,7 @@ enum PiperTTS {
         phrases: [TextImport.Phrase],
         voice: String,
         rate: EdgeTTS.Rate,
+        lêNotas: Bool,
         shouldCancel: @escaping () -> Bool,
         progress: @escaping (String) -> Void,
         onChunk: @escaping (EdgeTTS.ChunkDelivery) -> Void
@@ -531,7 +534,7 @@ enum PiperTTS {
                 // Texto adaptado para a fala; o publicado segue o original.
                 // Fim de parágrafo ganha `\n` (pausa do modelo; o vão entra na
                 // duração medida do WAV e o offset acumulado segue correto).
-                var falado = ReadAloudFilter.forSpeech(phrase.text, voice: voice)
+                var falado = ReadAloudFilter.forSpeech(phrase.text, voice: voice, lêNotas: lêNotas)
                 if falado.isEmpty { falado = phrase.text }
                 if phrase.paragraphEnd { falado += "\n" }
                 let wavURL = wavsDir.appendingPathComponent(String(format: "frase-%05d.wav", i))

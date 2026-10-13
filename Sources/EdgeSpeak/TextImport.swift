@@ -20,14 +20,18 @@ enum TextImport {
         let rects: [CGRect]
         let words: [WordBox]
         let paragraphEnd: Bool
+        /// Número da nota de rodapé quando a frase É o corpo de uma nota
+        /// (nil para texto corrido). Preenchido por `resolveFootnotes`.
+        let notaNumero: Int?
 
-        init(index: Int, text: String, page: Int?, rects: [CGRect], words: [WordBox] = [], paragraphEnd: Bool = false) {
+        init(index: Int, text: String, page: Int?, rects: [CGRect], words: [WordBox] = [], paragraphEnd: Bool = false, notaNumero: Int? = nil) {
             self.index = index
             self.text = text
             self.page = page
             self.rects = rects
             self.words = words
             self.paragraphEnd = paragraphEnd
+            self.notaNumero = notaNumero
         }
     }
 
@@ -65,8 +69,13 @@ enum TextImport {
                     userInfo: [NSLocalizedDescriptionKey: "PDF sem camada de texto; não há o que ler."]
                 )
             }
-            let frases = makePhrases(from: segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box) }) })
-            let frasesFiltradas = makePhrases(from: filtered(segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box) }) }, isPDF: true))
+            // Passo de ANÁLISE entre abrir e transcrever: com os segmentos
+            // extraídos, separa o que não é texto corrido (corpos de notas
+            // ligados aos marcadores, rótulos soltos descartados) antes de
+            // repartir em frases de leitura. É aqui que moram as próximas
+            // separações (fórmulas densas, legendas) sem tocar no leitor.
+            let frases = resolveFootnotes(makePhrases(from: segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box) }) }))
+            let frasesFiltradas = resolveFootnotes(makePhrases(from: filtered(segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box) }) }, isPDF: true)))
             return (
                 filtrado: join(frasesFiltradas), integral: join(frases), pdf: doc,
                 frases: frases, frasesFiltradas: frasesFiltradas
@@ -145,6 +154,87 @@ enum TextImport {
             }
         }
         return out
+    }
+
+    /// Liga corpos de notas de rodapé aos seus marcadores, na mesma lista.
+///
+/// Regra geral (vale para todo PDF): ponto + número sobrescrito é marcador;
+/// o corpo mora no rodapé da página (ou em notas de fim, no fim do
+/// documento). O que faz aqui:
+/// - número solto de 1–2 dígitos com página (rótulo sem corpo, como os
+///   "1".."15" do artigo de teste) é descartado — lido, viraria "um";
+/// - corpo ("12 Autores, ...", número + texto longo) procura o marcador N na
+///   mesma página e, faltando, o marcador anterior mais próximo no documento
+///   (cobre notas de fim); achando, perde o número e vai para logo após a
+///   frase do marcador — é lido direto após o anúncio, como o dono pediu;
+/// - sem marcador, o corpo fica intacto onde está (pode ser data ou
+///   enumeração: mexer seria corrupção, e a leitura segue correta).
+/// Os índices das frases que ficam NÃO mudam (são propriedade, não posição)
+/// — destaque e salto por índice continuam valendo.
+    static func resolveFootnotes(_ phrases: [Phrase]) -> [Phrase] {
+        var lista = phrases.filter { ph in
+            guard ph.page != nil else { return true }
+            let t = ph.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !(t.count <= 2 && Int(t) != nil)
+        }
+        struct Corpo { var pos: Int; var numero: Int; var texto: String; var frase: Phrase }
+        var corpos: [Corpo] = []
+        for (pos, ph) in lista.enumerated() {
+            guard ph.page != nil, ph.notaNumero == nil else { continue }
+            let t = ph.text.drop(while: { $0.isWhitespace })
+            let digitos = String(t.prefix(while: { $0.isNumber }))
+            guard (1...2).contains(digitos.count), let n = Int(digitos) else { continue }
+            let resto = t.dropFirst(digitos.count)
+            guard resto.first?.isWhitespace == true else { continue } // "12."/"12)" não é corpo
+            let corpo = resto.drop(while: { $0.isWhitespace })
+            guard corpo.count >= 12 else { continue }
+            corpos.append(Corpo(pos: pos, numero: n, texto: String(corpo), frase: ph))
+        }
+        // De trás para frente: mover não desloca as posições ainda por tratar.
+        for corpo in corpos.reversed() {
+            let alvo = marcaAnterior(
+                numero: corpo.numero, pagina: corpo.frase.page,
+                ate: corpo.pos, em: lista, excluindo: corpo.pos)
+            guard let m = alvo else { continue } // sem marcador: intacto
+            let movida = Phrase(
+                index: corpo.frase.index, text: corpo.texto,
+                page: corpo.frase.page, rects: corpo.frase.rects,
+                words: corpo.frase.words,
+                paragraphEnd: corpo.frase.paragraphEnd,
+                notaNumero: corpo.numero)
+            lista.remove(at: corpo.pos)
+            let destino = m > corpo.pos ? m : m + 1
+            lista.insert(movida, at: destino)
+        }
+        return lista
+    }
+
+    /// Posição da frase com o marcador N: mesma página primeiro (em ordem),
+    /// senão a anterior mais próxima no documento (notas de fim). `nil` sem
+    /// marcador — e sem marcador não se move nada.
+    private static func marcaAnterior(
+        numero n: Int, pagina: Int?, ate pos: Int, em lista: [Phrase], excluindo: Int
+    ) -> Int? {
+        let ns = String(n)
+        let formas = [
+            #"(?<=[A-Za-zÀ-ÿ\)\]"'”’])\."# + ns + #"(?![\dA-Za-zÀ-ÿ.])"#,
+            #"(?<=[A-Za-zÀ-ÿ\)\]"'”’]),"# + ns + #"(?![\dA-Za-zÀ-ÿ.])"#,
+            #"([A-Za-zÀ-ÿ]{2,}[a-zà-ÿ])"# + ns + #"(?![\dA-Za-zÀ-ÿ.])"#,
+        ]
+        let res = formas.compactMap { try? NSRegularExpression(pattern: $0) }
+        func tem(_ texto: String) -> Bool {
+            let faixa = NSRange(texto.startIndex..., in: texto)
+            return res.contains { $0.firstMatch(in: texto, options: [], range: faixa) != nil }
+        }
+        if let pagina {
+            for (i, ph) in lista.enumerated() where i != excluindo && ph.page == pagina {
+                if tem(ph.text) { return i }
+            }
+        }
+        for i in stride(from: pos - 1, through: 0, by: -1) {
+            if tem(lista[i].text) { return i }
+        }
+        return nil
     }
 
     /// Minúsculas, só letras e dígitos: mesma normalização do karaokê.

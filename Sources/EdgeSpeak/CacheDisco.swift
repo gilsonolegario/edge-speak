@@ -17,8 +17,11 @@ enum CacheDisco {
     /// `v2` invalida o cache gravado antes do karaokê: aqueles segmentos não
     /// têm `words`, e reaproveitá-los calaria o destaque por palavra para
     /// sempre no mesmo documento.
-    static func key(text: String, voice: String, rate: EdgeTTS.Rate) -> String {
-        let raw = "v2|\(voice)|\(rate.percent)|\(text)"
+    /// `lêNotas` entra na chave (áudio com e sem notas é diferente); com o
+    /// default, a matéria-prima é idêntica à de antes — nenhum cache antigo
+    /// é invalidado.
+    static func key(text: String, voice: String, rate: EdgeTTS.Rate, lêNotas: Bool = true) -> String {
+        let raw = "v2|\(voice)|\(rate.percent)|\(lêNotas ? "" : "sem-notas|")\(text)"
         let digest = SHA256.hash(data: Data(raw.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }

@@ -20,6 +20,9 @@ struct ContentView: View {
     @State private var showingImporter = false
     /// Segue a frase lida no PDF; desligar congela a rolagem.
     @AppStorage(AppSetting.followKey) private var followReading: Bool = AppSetting.followDefault
+    /// Lê corpos de notas de rodapé (default ligado); desligado, marcadores
+    /// viram pausa e corpos saem da lista de leitura.
+    @AppStorage(AppSetting.footnoteKey) private var lêNotas: Bool = AppSetting.footnoteDefault
     /// Cada incremento força o PDF a voltar ao trecho lido.
     @State private var revealToken: Int = 0
     /// Geração da carga em curso: a leitura do PDF roda em fundo, e se o
@@ -117,7 +120,11 @@ struct ContentView: View {
 
     /// Lista a ser lida (PDF: lista ativa; editor: reparte na hora, UMA flag).
     private func playList() -> [TextImport.Phrase] {
-        if pdfDocument != nil { return activePhrases }
+        if pdfDocument != nil {
+            // Sem notas, os corpos saem; os índices das que ficam NÃO mudam
+            // (são propriedade, não posição) — destaque e salto seguem valendo.
+            return lêNotas ? activePhrases : activePhrases.filter { $0.notaNumero == nil }
+        }
         return TextImport.editorPhrases(text, integral: integralMode)
     }
 
@@ -530,7 +537,7 @@ struct ContentView: View {
         if canPause {
             controller.pause()
         } else {
-            controller.play(phrases: playList(), voice: voice, rate: rate)
+            controller.play(phrases: playList(), voice: voice, rate: rate, lêNotas: lêNotas)
         }
     }
 
@@ -551,7 +558,7 @@ struct ContentView: View {
         // pelo início em vez do ponto do clique.
         let lista = playList()
         guard let pos = lista.firstIndex(where: { $0.index == index }) else { return }
-        controller.play(phrases: Array(lista[pos...]), voice: voice, rate: rate)
+        controller.play(phrases: Array(lista[pos...]), voice: voice, rate: rate, lêNotas: lêNotas)
         controller.jumpToSegment(index)
     }
 
@@ -563,7 +570,7 @@ struct ContentView: View {
         let active = isReading || controller.isBusy
         controller.discardTranscription()
         if active {
-            controller.play(phrases: playList(), voice: voice, rate: rate)
+            controller.play(phrases: playList(), voice: voice, rate: rate, lêNotas: lêNotas)
         }
     }
 
@@ -715,7 +722,7 @@ struct ContentView: View {
             Divider()
             Button {
                 controller.discardTranscription()
-                controller.play(phrases: playList(), voice: voice, rate: rate)
+                controller.play(phrases: playList(), voice: voice, rate: rate, lêNotas: lêNotas)
             } label: {
                 Label(L.get("ui.newReading", locale: idioma), systemImage: "arrow.triangle.2.circlepath")
             }

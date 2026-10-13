@@ -302,6 +302,7 @@ struct Rate: Equatable, Hashable, Sendable {
         voice: String,
         maxChars: Int,
         rate: Rate = .normal,
+        lêNotas: Bool = true,
         shouldCancel: @escaping () -> Bool = { false },
         progress: @escaping (String) -> Void
     ) -> AsyncThrowingStream<ChunkDelivery, Error> {
@@ -310,6 +311,7 @@ struct Rate: Equatable, Hashable, Sendable {
                 do {
                     let final = try await runStreaming(
                         phrases: phrases, voice: voice, maxChars: maxChars, rate: rate,
+                        lêNotas: lêNotas,
                         shouldCancel: shouldCancel, progress: progress,
                         onChunk: { continuation.yield($0) }
                     )
@@ -330,6 +332,7 @@ struct Rate: Equatable, Hashable, Sendable {
         voice: String,
         maxChars: Int,
         rate: Rate,
+        lêNotas: Bool,
         shouldCancel: @escaping () -> Bool,
         progress: @escaping (String) -> Void,
         onChunk: @escaping (ChunkDelivery) -> Void
@@ -389,7 +392,7 @@ struct Rate: Equatable, Hashable, Sendable {
                         var piece = ""
                         for (idx, ph) in groupPhrases.enumerated() {
                             if idx > 0 { piece += groupPhrases[idx - 1].paragraphEnd ? "\n" : " " }
-                            piece += ReadAloudFilter.forSpeech(ph.text, voice: voice)
+                            piece += ReadAloudFilter.forSpeech(ph.text, voice: voice, lêNotas: lêNotas)
                         }
                         let outURL = chunksDir.appendingPathComponent(
                             String(format: "chunk-%04d.mp3", i))
@@ -404,7 +407,7 @@ struct Rate: Equatable, Hashable, Sendable {
                         let linesURL = chunksDir.appendingPathComponent(
                             String(format: "chunk-%04d.lines.txt", i))
                         let speechLines = groupPhrases.map {
-                            ReadAloudFilter.forSpeech($0.text, voice: voice)
+                            ReadAloudFilter.forSpeech($0.text, voice: voice, lêNotas: lêNotas)
                         }
                         // Por que o script Python e não o CLI: o CLI só grava
                         // SRT por frase; o script lê os eventos SentenceBoundary

@@ -21,6 +21,9 @@ enum AppSetting {
     static let integralKey = "integralText"
     static let integralDefault = false
 
+    static let footnoteKey = "readFootnotes"
+    static let footnoteDefault = true
+
     static let fontKey = "fontSize"
     static let fontDefault: Double = 17
 

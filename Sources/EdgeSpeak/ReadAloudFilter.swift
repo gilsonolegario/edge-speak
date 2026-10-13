@@ -177,7 +177,9 @@ enum ReadAloudFilter {
     /// mudariam o texto exibido. O destaque segue o original; só o
     /// sintetizador recebe o adaptado. Inclui notação lógica ("R = ∃uT(u,o)"
     /// vira "R equals there exists u such that T of u, o"), no idioma da voz.
-    static func forSpeech(_ text: String, voice: String) -> String {
+    /// - `lêNotas`: com `false`, o marcador de nota vira pausa e o corpo
+    /// (fora da lista de leitura) nunca chega aqui. Default `true`.
+    static func forSpeech(_ text: String, voice: String, lêNotas: Bool = true) -> String {
         let pt = isPortugueseVoice(voice)
         // Blackboard-bold antes do NFKC: a normalização funde "ℕ" com "N",
         // "ℤ" com "Z" etc., e a tabela de regex já os receberia mortos.
@@ -192,7 +194,7 @@ enum ReadAloudFilter {
         // já lê "1944" como "nineteen forty-four" sozinho.
         if pt { out = spellOutYears(out) }
         out = expandLogic(out, portuguese: pt)
-        out = expandFootnoteMarkers(out, portuguese: pt)
+        out = expandFootnoteMarkers(out, portuguese: pt, anuncia: lêNotas)
         // As expansões podem duplicar espaços e vírgulas, ou colar vírgula
         // no próximo símbolo ("x,(W"). Ordem: primeiro colapsa, depois espaça.
         out = out.replacingOccurrences(of: "[ ]{2,}", with: " ", options: .regularExpression)
@@ -228,7 +230,24 @@ enum ReadAloudFilter {
     /// "Figura 7" e "1." de início de linha); o "3 x 4" não tem ponto nem
     /// dígito colado e passa intacto. O texto vem do catálogo `L`
     /// ("speech.footnote"), fonte única nos dois idiomas.
-    private static func expandFootnoteMarkers(_ text: String, portuguese pt: Bool) -> String {
+    private static func expandFootnoteMarkers(_ text: String, portuguese pt: Bool, anuncia: Bool = true) -> String {
+        // Sem anúncio (opção desligada): o marcador vira pausa curta, para a
+        // frase correr sem prometer nota nenhuma.
+        if !anuncia {
+            var calado = text
+            for padrao in [
+                #"(?<=[A-Za-zÀ-ÿ\)\]"'”’])\.(\d{1,2})(?![\dA-Za-zÀ-ÿ.])"#,
+                #"(?<=[A-Za-zÀ-ÿ\)\]"'”’]),(\d{1,2})(?![\dA-Za-zÀ-ÿ.])"#,
+                #"([A-Za-zÀ-ÿ]{2,}[a-zà-ÿ])(\d{1,2})(?![\dA-Za-zÀ-ÿ.])"#,
+            ] {
+                guard let re = try? NSRegularExpression(pattern: padrao) else { continue }
+                calado = re.stringByReplacingMatches(
+                    in: calado, options: [],
+                    range: NSRange(calado.startIndex..., in: calado),
+                    withTemplate: ",")
+            }
+            return calado
+        }
         let molde = L.get("speech.footnote", locale: pt ? .pt : .en)
         let marca1 = molde.replacingOccurrences(of: "{0}", with: "$1")
         let marca2 = molde.replacingOccurrences(of: "{0}", with: "$2")

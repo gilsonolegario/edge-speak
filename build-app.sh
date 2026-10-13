@@ -12,6 +12,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+# Nunca remontar o bundle com o app em execução: o `rm -rf` + `cp -a` por
+# cima dos arquivos abertos (pythonbase, scripts) corrompe a cópia com
+# "Operation not permitted" no meio e deixa um bundle incompleto no disco
+# (medido em 2026-10-13). Feche o app antes de empacotar.
+if pgrep -f "EdgeSpeak.app/Contents/MacOS/EdgeSpeak" >/dev/null 2>&1; then
+    fail "o EdgeSpeak está rodando — feche (⌘Q) antes de empacotar."
+fi
+
 STAGE="$ROOT/Build/staging"
 APP="$ROOT/EdgeSpeak.app"
 
