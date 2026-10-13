@@ -3,8 +3,11 @@
 #
 # O bundle final funciona num Mac virgem (só macOS 14+ arm64 + rede): traz
 # uma base Python 3.13 (`Resources/pythonbase`), os wheels para instalação
-# SEM rede (`Resources/wheels`), duas vozes Piper (`Resources/voices`) e os
-# scripts `Tools/*.py`. Na primeira execução o app cria um venv em
+# SEM rede (`Resources/wheels`) e os scripts `Tools/*.py`. A base é podada
+# de bagunça (Tcl/Tk, idle, headers, pip da base, .pyc) — nunca de motor. As vozes Piper
+# (~63 MB cada) NÃO vão no bundle: cada usuário baixa a sua sob demanda no
+# primeiro uso, para `~/Library/Application Support/EdgeSpeak/voices` (conta
+# em `docs/tamanho-bundle.md`). Na primeira execução o app cria um venv em
 # ~/Library/Application Support/EdgeSpeak/venv — nada fora de ~/Projects é
 # tocado pelo build, e nenhum daemon é instalado.
 set -euo pipefail
@@ -75,21 +78,29 @@ if [ ! -f "$WHEELS/$PIPER_FILE" ]; then
 fi
 echo "wheels: $(tem "$WHEELS/*.whl" && ls "$WHEELS"/*.whl | wc -l | tr -d ' ') arquivos"
 
-# 3. Vozes Piper embutidas (baixa as ausentes; ~60 MB cada par).
-VOICES="$STAGE/voices"
-mkdir -p "$VOICES"
-HF="https://huggingface.co/rhasspy/piper-voices/resolve/main"
-voz() { # $1 = prefixo remoto, $2 = base do arquivo
-    local ext
-    for ext in .onnx .onnx.json; do
-        if [ ! -f "$VOICES/$2$ext" ]; then
-            curl -fL --retry 3 -o "$VOICES/$2$ext" "$HF/$1$2$ext" \
-                || fail "não baixei a voz $2$ext — verifique a rede e tente de novo."
-        fi
-    done
-}
-voz "pt/pt_BR/faber/medium/" "pt_BR-faber-medium"
-voz "en/en_US/lessac/medium/" "en_US-lessac-medium"
+# 2b. Poda da base (só bagunça, nunca motor): a base do `uv` traz Tcl/Tk,
+# idle, headers, pip da base e .pyc que o app nunca usa — o venv de suporte
+# nasce por `base -m venv` (stdlib ensurepip, mantido) e instala pelos
+# wheels. Medido em 2026-10-13: ~33 MB a menos no bundle. Roda DEPOIS dos
+# downloads acima, que usam `$BASE -m pip`.
+PB="$STAGE/pythonbase"
+rm -rf "$PB/bin/idle3"* "$PB/bin/pydoc3"* "$PB/bin/pip"*
+rm -rf "$PB/include"
+rm -rf "$PB/lib/libtcl"* "$PB/lib/libtk"* "$PB/lib/tcl"* "$PB/lib/tk"* \
+       "$PB/lib/itcl"* "$PB/lib/thread"*
+rm -rf "$PB/lib/python3.13/tkinter" "$PB/lib/python3.13/idlelib" \
+       "$PB/lib/python3.13/turtledemo" "$PB/lib/python3.13/pydoc_data" \
+       "$PB/lib/python3.13/unittest" \
+       "$PB/lib/python3.13/site-packages/pip"*
+find "$PB" -name '__pycache__' -type d -prune -exec rm -rf {} +
+find "$PB" -name '*.pyc' -delete
+echo "base podada: $(du -sh "$PB" | cut -f1)"
+
+# 3. Vozes Piper: FORA do bundle, de propósito. Cada usuário baixa a sua sob
+# demanda no primeiro uso (`PiperTTS.ensureVoice`, destino em Application
+# Support; a conta está em `docs/tamanho-bundle.md`). Nada a baixar aqui — e
+# `Build/staging/voices` segue como reserva de dev (o `bundledVoicesDir` o
+# consulta antes da rede).
 
 # 4. Compila e monta o .app.
 swift build -c release --product EdgeSpeak
@@ -103,7 +114,6 @@ cp "$BIN" "$APP/Contents/MacOS/EdgeSpeak"
 cp "$ROOT"/Tools/*.py "$APP/Contents/Resources/"
 cp -a "$STAGE/pythonbase" "$APP/Contents/Resources/pythonbase"
 cp -a "$STAGE/wheels" "$APP/Contents/Resources/wheels"
-cp -a "$STAGE/voices" "$APP/Contents/Resources/voices"
 # Ícone próprio (onda de voz); o Info.plist o declara abaixo.
 cp "$ROOT/Resources/EdgeSpeak.icns" "$APP/Contents/Resources/EdgeSpeak.icns"
 
