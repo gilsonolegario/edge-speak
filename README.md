@@ -146,10 +146,6 @@ swift test
 
 The package builds one target, `EdgeSpeak`, from `Sources/EdgeSpeak/`; tests are in `Tests/EdgeSpeakTests/` (swift-testing, `@Test`/`#expect`).
 
-## Pricing
-
-EdgeSpeak is free and always will be. No license keys, no accounts, no telemetry.
-
 ## Documentation
 
 - **Layer-by-layer contract** (files, functions and rules) — [INTERFACE.md](INTERFACE.md)
