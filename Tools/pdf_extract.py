@@ -35,6 +35,7 @@ JSON:
 
 import argparse
 import json
+import re
 import statistics
 import sys
 
@@ -51,6 +52,36 @@ def _span_de(palavra_box, spans_linha):
         if area > melhor_area:
             melhor, melhor_area = s, area
     return melhor
+
+
+def _inicia_com_nota(texto):
+    """Começa como chamada de nota: número (1–2 dígitos) colado ou seguido
+    de pontuação, depois letra. Cobre "1The first edition...", "2Demopoulos",
+    "3)." e "12. Smith" — a forma real dos corpos de nota em PDF acadêmico.
+    """
+    m = re.match(r"^\s*(\d{1,2})\s*[.):]?\s*(?=[A-Za-z])", texto)
+    return bool(m)
+
+
+def candidatas_ok(candidatos, altura_pagina):
+    """Aceita o bloco só se ele tem cara de bloco de notas (SPIE 2015 / PKU).
+
+    Duas condições, ambas para conter os falsos positivos medidos:
+    - Várias linhas e ao menos uma abrindo com número de nota. Uma linha
+      solta no rodapé é quase sempre marca d'água de impressão ("EBSCOhost
+      - printed on ..."), que tem corpo menor e mora no rodapé como nota —
+      e promovia uma régua falsa em TODAS as páginas de um artigo medido.
+    - O bloco alcança a metade da margem inferior: nota de rodapé mora no
+      pé da página, não no meio do texto.
+    """
+    if len(candidatos) < 2:
+        return False
+    if not any(_inicia_com_nota(l["text"]) for l in candidatos):
+        return False
+    # box = [x0, fundo, x1, topo] em coords PDFKit (origem embaixo): o bloco
+    # de notas mora no PÉ da página, que é o topo MAIS BAIXO (box[3] menor).
+    fundo_topo = min(l["box"][3] for l in candidatos)
+    return fundo_topo < altura_pagina * 0.5
 
 
 def main() -> int:
@@ -211,16 +242,54 @@ def main() -> int:
                 )
                 itens.append({"text": p["text"], "box": p["box"], "sup": sup})
             caixas = [p["box"] for p in partes]
+            # Fonte dominante da linha (maior span não-sobrescrito): notas
+            # de rodapé são impressas em corpo menor que o texto corrido.
+            tam_linha = max(
+                (
+                    float(s.get("size", 0.0))
+                    for s in spans
+                    if not (int(s.get("flags", 0)) & 1)
+                ),
+                default=0.0,
+            )
+            # Título de seção tem fonte MAIOR; não é nota, mesmo menor que o
+            # título do documento. Medido contra a mediana da página.
+            e_titulo = bool(spans) and mediana > 0 and tam_linha > mediana * 1.18
+            # Heurística de nota (edgeparse-core): fonte menor que 0,85× da
+            # dominante e texto corrido (>= 12 chars). O Swift cruza com a
+            # posição (zona de notas / régua) antes de tratar como corpo.
+            e_nota = (
+                mediana > 0
+                and 0 < tam_linha <= 0.85 * mediana
+                and not e_titulo
+                and len(caixas) >= 12
+            )
+            caixa_linha = [
+                min(b[0] for b in caixas),
+                min(b[1] for b in caixas),
+                max(b[2] for b in caixas),
+                max(b[3] for b in caixas),
+            ]
             lines.append({
                 "text": " ".join(p["text"] for p in partes),
-                "box": [
-                    min(b[0] for b in caixas),
-                    min(b[1] for b in caixas),
-                    max(b[2] for b in caixas),
-                    max(b[3] for b in caixas),
-                ],
+                "box": caixa_linha,
                 "words": itens,
+                "note": e_nota,
             })
+
+        # Zona de notas SINTÉTICA (edgeparse-core) quando não há régua
+        # desenhada: a partir do topo do bloco contíguo de linhas "note" na
+        # metade inferior. `box[3]` é o topo em coords PDFKit (origem embaixo),
+        # então "metade inferior" é topo < metade da altura. Sai em coords
+        # PDFKit (topo do bloco). Sem bloco, mantém None — as heurísticas
+        # antigas continuam valendo.
+        if regra_y is None and lines:
+            metade = h * 0.5
+            candidatos = [
+                l for l in lines if l["note"] and l["box"][3] < metade
+            ]
+            if candidatas_ok(candidatos, h):
+                regra_y = max(l["box"][3] for l in candidatos)
         pages.append({"index": index, "footnote_rule_y": regra_y, "lines": lines})
 
     with open(args.out, "w", encoding="utf-8") as fh:

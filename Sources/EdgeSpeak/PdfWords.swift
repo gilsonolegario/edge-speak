@@ -14,6 +14,12 @@ enum PdfWords {
         /// antigo — a ausência não quebra a decodificação).
         let footnoteRuleY: CGFloat?
         let lines: [Line]
+
+        enum CodingKeys: String, CodingKey {
+            case index, lines
+            case footnoteRuleY = "footnote_rule_y"
+        }
+
         struct Line: Decodable {
             let text: String
             let box: [CGFloat]

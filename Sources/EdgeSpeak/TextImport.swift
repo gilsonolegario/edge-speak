@@ -240,7 +240,16 @@ enum TextImport {
             }
             return false
         }
-        struct Corpo { var numero: Int; var texto: String; var frase: Phrase }
+        struct Corpo {
+            var numero: Int
+            var texto: String
+            var frase: Phrase
+            /// Continuações da mesma nota (mesma página, abaixo da régua,
+            /// sem novo número). O PDF intercala cada linha de nota como um
+            /// segmento próprio; sem levá-las junto, só a primeira frase vai
+            /// para o marcador e o resto da nota fica no fluxo da página.
+            var continuacoes: [Phrase] = []
+        }
         var corpos: [Corpo] = []
         for ph in lista {
             guard ph.page != nil, ph.notaNumero == nil else { continue }
@@ -251,10 +260,42 @@ enum TextImport {
             let digitos = String(t.prefix(while: { $0.isNumber }))
             guard (1...2).contains(digitos.count), let n = Int(digitos) else { continue }
             let resto = t.dropFirst(digitos.count)
-            guard resto.first?.isWhitespace == true else { continue } // "12."/"12)" não é corpo
-            let corpo = resto.drop(while: { $0.isWhitespace })
-            guard corpo.count >= 12 else { continue }
-            corpos.append(Corpo(numero: n, texto: String(corpo), frase: ph))
+            // ABAIXO da régua, o número vem colado ao texto ("1The first
+            // edition..."): corpo de nota, não texto corrido. O extrator já
+            // marcou essas linhas por fonte menor (heurística edgeparse-core)
+            // e a régua sintética as delimita; aqui só o colado com marca de
+            // nota é aceito. Exige letra logo após o dígito, que é a forma do
+            // marcador colado ("1The"); `digitos.count <= 2` já exclui ano
+            // ("2024 The") e dígito seguido de pontuação ("12.)") não é letra.
+            // ACIMA da régua (ou sem régua), vale a regra antiga: exige
+            // número + espaço, para não comer data ou enumeração do corpo.
+            let abaixoDaRegua = regras[ph.page ?? -1] != nil && zona(ph)
+            let corpoColado: Substring
+            if abaixoDaRegua,
+               digitos.count <= 2,
+               let marca = resto.first, marca.isLetter,
+               resto.count >= 12 {
+                corpoColado = resto
+            } else {
+                guard resto.first?.isWhitespace == true else { continue } // "12."/"12)" não é corpo
+                corpoColado = resto.drop(while: { $0.isWhitespace })
+            }
+            guard corpoColado.count >= 12 else { continue }
+            // Continuações: linhas seguintes da MESMA nota, abaixo da régua,
+            // sem novo número. O PDF intercala cada linha de nota como um
+            // segmento próprio; sem levá-las junto, só a primeira frase vai
+            // para o marcador e o resto da nota fica no fluxo da página.
+            var continuacoes: [Phrase] = []
+            if abaixoDaRegua, let pg = ph.page, let ry = regras[pg] {
+                var j = ph.index + 1
+                while let prox = lista.first(where: { $0.index == j }), prox.page == pg {
+                    guard let topoProx = prox.rects.map(\.maxY).max(), topoProx < ry else { break }
+                    if prox.text.drop(while: { $0.isWhitespace }).first?.isNumber == true { break }
+                    continuacoes.append(prox)
+                    j += 1
+                }
+            }
+            corpos.append(Corpo(numero: n, texto: String(corpoColado), frase: ph, continuacoes: continuacoes))
         }
         // Ordem crescente de número (técnica do archilles-scriptor): a busca
         // do N+1 retoma após o marcador do N — um dígito perdido nunca é
@@ -286,19 +327,38 @@ enum TextImport {
             }
             guard let posM = lista.firstIndex(where: { $0.index == idxMarcador })
             else { continue }
-            let movida = Phrase(
+            // Levanta o corpo e TODAS as continuações de uma vez (remover por
+            // índice desloca os seguintes; coletar primeiro evita pular linhas).
+            let idxs = ([corpo.frase.index] + corpo.continuacoes.map(\.index)).sorted()
+            var blocos: [Phrase] = []
+            for ix in idxs {
+                if let p = lista.firstIndex(where: { $0.index == ix }) {
+                    blocos.append(lista.remove(at: p))
+                }
+            }
+            guard !blocos.isEmpty else { continue }
+            // A primeira linha vira o corpo sem número; as demais entram com
+            // o mesmo número, lidas logo após, na ordem do rodapé.
+            var juntado = [Phrase(
                 index: corpo.frase.index, text: corpo.texto,
                 page: corpo.frase.page, rects: corpo.frase.rects,
                 words: corpo.frase.words,
-                paragraphEnd: corpo.frase.paragraphEnd,
-                notaNumero: corpo.numero)
-            lista.remove(at: posAtual)
+                paragraphEnd: corpo.continuacoes.isEmpty,
+                notaNumero: corpo.numero)]
+            for c in corpo.continuacoes {
+                juntado.append(Phrase(
+                    index: c.index, text: c.text, page: c.page,
+                    rects: c.rects, words: c.words,
+                    paragraphEnd: false, notaNumero: corpo.numero))
+            }
             let destino = posM > posAtual ? posM : posM + 1
-            lista.insert(movida, at: min(max(destino, 0), lista.count))
+            let alvo = min(max(destino, 0), lista.count)
+            lista.insert(contentsOf: juntado, at: alvo)
             limite = posM > posAtual ? posM - 1 : posM
         }
         return lista
     }
+
 
     /// Posição da frase com o marcador N: mesma página primeiro (em ordem),
     /// senão a anterior mais próxima no documento (notas de fim). `nil` sem

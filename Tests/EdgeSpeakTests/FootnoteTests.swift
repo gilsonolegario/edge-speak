@@ -273,4 +273,67 @@ struct FootnoteTests {
         #expect(fora[2].text == "8 dias depois do evento central")
         #expect(fora[2].notaNumero == nil)
     }
+
+    // MARK: - Corpo colado ao número (Neutrality v80)
+
+    /// Corpo colado ao marcador ("1The first edition..."), abaixo da régua:
+    /// ainda é nota e vai para o marcador. O PDF acadêmico típico junta o
+    /// número ao texto sem espaço; sem isto a nota ficava no fluxo da página.
+    @Test func corpoColadoAoNumeroVaiParaOMarcador() {
+        let regras: [Int: CGFloat] = [0: 100]
+        let lista = [
+            fraseCaixa(0, "tese aqui.1", pagina: 0, topo: 500),
+            fraseCaixa(1, "1The first edition associates the way with instrumentalism", pagina: 0, topo: 50),
+        ]
+        let fora = TextImport.resolveFootnotes(lista, regras: regras)
+        #expect(fora.map(\.index) == [0, 1])
+        #expect(fora[1].notaNumero == 1)
+        #expect(fora[1].text.hasPrefix("The first edition"))
+        #expect(!fora[1].text.hasPrefix("1"))
+    }
+
+    /// Continuações da mesma nota (linhas seguintes abaixo da régua, sem novo
+    /// número) sobem junto com o corpo, na ordem do rodapé. Sem isto, só a
+    /// primeira frase ia para o marcador e o resto da nota ficava no fluxo.
+    @Test func continuacoesDaNotaSobemJuntas() {
+        let regras: [Int: CGFloat] = [0: 100]
+        let lista = [
+            fraseCaixa(0, "tese aqui.2", pagina: 0, topo: 500),
+            fraseCaixa(1, "2Demopoulos makes the preservation a condition of adequacy", pagina: 0, topo: 60),
+            fraseCaixa(2, "and truth is a condition of the reconstruction of Carnap", pagina: 0, topo: 45),
+            fraseCaixa(3, "he argues that a claim of structural similarity is significant", pagina: 0, topo: 30),
+            fraseCaixa(4, "frase corrida acima da zona de notas aqui", pagina: 0, topo: 400),
+        ]
+        let fora = TextImport.resolveFootnotes(lista, regras: regras)
+        #expect(fora.map(\.index) == [0, 1, 2, 3, 4])
+        #expect(fora[1].notaNumero == 2)
+        #expect(fora[2].notaNumero == 2)
+        #expect(fora[3].notaNumero == 2)
+        #expect(fora[4].notaNumero == nil)
+    }
+
+    /// Acima da régua a regra antiga continua valendo: número colado não é
+    /// nota (pode ser ano ou texto corrido), e nada se move.
+    @Test func acimaDaReguaColadoNaoENota() {
+        let regras: [Int: CGFloat] = [0: 100]
+        let lista = [
+            fraseCaixa(0, "tese aqui.1", pagina: 0, topo: 500),
+            fraseCaixa(1, "1The year 2024 brought a change in the field of study", pagina: 0, topo: 300),
+        ]
+        let fora = TextImport.resolveFootnotes(lista, regras: regras)
+        #expect(fora.map(\.index) == [0, 1])
+        #expect(fora[1].notaNumero == nil)
+    }
+
+    /// Sem régua (via PDFKit, sem PyMuPDF), o colado não liga: sem a zona
+    /// confirmada, arriscaria comer texto corrido. Vale a regra antiga.
+    @Test func semReguaColadoNaoLiga() {
+        let lista = [
+            frase(0, "tese aqui.1", pagina: 0),
+            frase(1, "1The first edition associates the way with instrumentalism", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(fora.map(\.index) == [0, 1])
+        #expect(fora[1].notaNumero == nil)
+    }
 }
