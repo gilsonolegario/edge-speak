@@ -21,7 +21,11 @@ enum CacheDisco {
     /// default, a matéria-prima é idêntica à de antes — nenhum cache antigo
     /// é invalidado.
     static func key(text: String, voice: String, rate: EdgeTTS.Rate, lêNotas: Bool = true) -> String {
-        let raw = "v2|\(voice)|\(rate.percent)|\(lêNotas ? "" : "sem-notas|")\(text)"
+        // "v3": geração do repartidor de frases. Mesma matéria, repartidor
+        // novo = índices novos — sem a geração na chave, um cache antigo
+        // serviria segmentos com índices de outra numeracão (achado da
+        // avaliação paralela). Mudar aqui invalida o cache uma vez.
+        let raw = "v3|\(voice)|\(rate.percent)|\(lêNotas ? "" : "sem-notas|")\(text)"
         let digest = SHA256.hash(data: Data(raw.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
