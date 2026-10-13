@@ -584,7 +584,12 @@ struct ContentView: View {
         // desligado nunca rola sozinho).
         revealToken += 1
         if controller.jumpToSegment(index) { return }
-        guard !controller.hasAudio, !controller.isBusy else { return }
+        // Sem `hasAudio` aqui de propósito: ele fica true após o Stop (a fila
+        // esvazia mas a flag não cai — auditoria 2026-10-13) e barraria o play
+        // para sempre, sem áudio, sem processo e sem erro. Quem cobre o índice
+        // já voltou pelo `jumpToSegment`; o resto precisa de síntese — e o
+        // `play` já guarda síntese em curso da mesma leitura.
+        guard !controller.isBusy else { return }
         // Sem áudio nenhum, sintetiza A PARTIR da frase clicada. Com a lista
         // inteira, o tocador já tinha o começo do documento tocando antes de a
         // fatia do trecho clicado existir — era isso que fazia o play começar
