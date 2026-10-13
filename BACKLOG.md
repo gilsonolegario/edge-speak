@@ -26,8 +26,9 @@ Repo público com histórico desde `0aa5658`.
 - [NO AR] Play retoma com síntese em curso; cache fora da main; pulo morre
   no erro; amarelo unificado painel/PDF; toggle sem PDF; arrasto não pula.
 - [ABERTO] 15 s iniciais sem destaque (causa não isolada).
-- [ABERTO] Hífen de fim de linha + virada de página no destaque (pesquisa
-  pronta em `docs/pesquisas/pymupdf-pesquisa.md`; implementação pendente).
+- [CÓDIGO] Hífen de fim de linha + virada de página no destaque
+  (pesquisa em `docs/pesquisas/pymupdf-pesquisa.md`; 77→2 tokens partidos
+  no artigo; frase parte por página sem atravessar caixa). Commit `23e9f27`.
 - [ABERTO] Marcador geométrico (bit de sobrescrito) e corpos onde existirem.
 - [ABERTO] Aba Avançado vazia (preencher com limpeza de cache ou remover).
 - [ABERTO] Trilho honesto no streaming (ainda grampeia no áudio medido).
