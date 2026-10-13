@@ -337,6 +337,26 @@ struct FootnoteTests {
         #expect(fora[1].notaNumero == nil)
     }
 
+    /// M5: o marcador pode vir DEPOIS do corpo (a busca na mesma página não
+    /// tem teto); aí corpo e continuações são removidos ANTES dele e posM
+    /// fica velho. A nota tem de entrar exatamente após a frase do marcador
+    /// — não depois da frase seguinte — contabilizando todas as remoções.
+    @Test func marcadorDepoisDoCorpoInsereNaAncora() {
+        let regras: [Int: CGFloat] = [0: 100]
+        let lista = [
+            fraseCaixa(0, "7 Autores afirmam isto aqui", pagina: 0, topo: 50),
+            fraseCaixa(1, "continuação da nota linha dois aqui", pagina: 0, topo: 40),
+            fraseSup(2, "argumento segue aqui", pagina: 0, palavras: [("argumento", false), ("7", true), ("segue", false)]),
+            fraseCaixa(3, "frase corrida depois do marcador aqui", pagina: 0, topo: 500),
+        ]
+        let fora = TextImport.resolveFootnotes(lista, regras: regras)
+        #expect(fora.map(\.index) == [2, 0, 1, 3])
+        #expect(fora[0].notaMarcador == 7)
+        #expect(fora[1].notaNumero == 7)
+        #expect(fora[2].notaNumero == 7)
+        #expect(fora[3].notaNumero == nil)
+    }
+
 // MARK: - Anúncio pelo pipeline (notaMarcador)
 
     /// O pipeline marca a frase do marcador; o anúncio não depende mais da

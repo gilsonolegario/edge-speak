@@ -339,6 +339,16 @@ enum TextImport {
             // Levanta o corpo e TODAS as continuações de uma vez (remover por
             // índice desloca os seguintes; coletar primeiro evita pular linhas).
             let idxs = ([corpo.frase.index] + corpo.continuacoes.map(\.index)).sorted()
+            // A âncora não pode estar dentro do bloco: a remoção levaria o
+            // marcador junto e não haveria onde inserir (fica onde está).
+            guard !idxs.contains(idxMarcador) else { continue }
+            // Remoções ANTES do marcador mudam a posição dele (corpo ou
+            // continuações em posição anterior — marcador depois do corpo,
+            // busca na mesma página sem teto). Contabiliza todas; posM sozinho
+            // cobriria só uma remoção e a nota cairia deslocada.
+            let antesDoMarcador = idxs.filter { ix in
+                lista.firstIndex(where: { $0.index == ix }).map { $0 < posM } ?? false
+            }.count
             var blocos: [Phrase] = []
             for ix in idxs {
                 if let p = lista.firstIndex(where: { $0.index == ix }) {
@@ -360,10 +370,12 @@ enum TextImport {
                     rects: c.rects, words: c.words,
                     paragraphEnd: false, notaNumero: corpo.numero))
             }
-            let destino = posM > posAtual ? posM : posM + 1
-            let alvo = min(max(destino, 0), lista.count)
+            // Âncora real após as remoções: o corpo entra exatamente após a
+            // frase do marcador, e a busca do N+1 retoma nela.
+            let ancora = posM - antesDoMarcador
+            let alvo = min(ancora + 1, lista.count)
             lista.insert(contentsOf: juntado, at: alvo)
-            limite = posM > posAtual ? posM - 1 : posM
+            limite = ancora
         }
         return lista
     }
