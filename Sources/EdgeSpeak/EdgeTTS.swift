@@ -226,11 +226,15 @@ struct Rate: Equatable, Hashable, Sendable {
     /// retry, uma falha isolada derrubaria a síntese inteira do documento.
     static let maxAttemptsPerChunk = 3
 
-    /// Agrupa frases inteiras em fatias <= maxChars, com a PRIMEIRA curta.
+    /// Agrupa frases inteiras em fatias <= maxChars, com a PRIMEIRA curta,
+    /// preferindo cortar em fim de parágrafo.
     ///
     /// Frase nunca é cortada no meio: o script devolve ~1 evento por frase e
     /// o emparelhamento por ordem vira o índice global. Primeira curta para
-    /// o áudio entrar em ~1 s; as demais vão atrás em ordem de índice.
+    /// o áudio entrar em ~1 s; as demais vão atrás em ordem de índice. O
+    /// corte em fim de parágrafo põe o respiro da fronteira (prosa nova +
+    /// silêncio aparado) numa pausa natural, em vez do meio do pensamento —
+    /// sem isso a transição entre fatias pica.
     static func buildChunks(
         _ phrases: [TextImport.Phrase],
         maxChars: Int,
@@ -241,18 +245,36 @@ struct Rate: Equatable, Hashable, Sendable {
         var count = 0
         // A primeira fatia usa firstChars; as demais, maxChars.
         var first = true
-        for phrase in phrases {
+        var i = 0
+        while i < phrases.count {
+            let phrase = phrases[i]
             let size = phrase.text.count
             let cap = first ? firstChars : maxChars
-            if !current.isEmpty, count + 1 + size > cap {
+            let add = (current.isEmpty ? 0 : 1) + size
+            if !current.isEmpty, count + add > cap {
+                if let corte = current.lastIndex(where: { $0.paragraphEnd }),
+                   corte < current.count - 1 {
+                    // Devolve o resto para a próxima fatia e reavalia a frase
+                    // atual contra ele; cada recuo encolhe, então termina.
+                    let resto = Array(current[(corte + 1)...])
+                    current = Array(current[...corte])
+                    out.append(current)
+                    current = resto
+                    count = resto.reduce(0) { $0 + $1.text.count }
+                        + max(0, resto.count - 1)
+                    first = false
+                    continue
+                }
                 out.append(current)
                 current = []
                 count = 0
                 first = false
+                continue
             }
             if !current.isEmpty { count += 1 }  // espaço de junção
             current.append(phrase)
             count += size
+            i += 1
         }
         if !current.isEmpty { out.append(current) }
         return out
@@ -444,6 +466,7 @@ struct Rate: Equatable, Hashable, Sendable {
                                     lastError = "não gerou áudio: \(self.tail(stderr, max: 300))"
                                     throw self.makeError(lastError)
                                 }
+                                self.trimTrailingSilence(outURL)
                                 progress("Sintetizando \(done.increment())/\(total)…")
                                 let script = try self.loadSegments(jsonURL)
                                 return (i, outURL, self.mapSegments(script, groupPhrases))
@@ -567,6 +590,36 @@ struct Rate: Equatable, Hashable, Sendable {
             throw makeError("A concatenação não gerou áudio.")
         }
         return outURL
+    }
+
+    /// Argumentos do ffmpeg para aparar o silêncio do FIM da fatia. Fatorado
+    /// puro para teste (a regra vive aqui, não espalhada no chamador).
+    static func silenceTrimArgs(input: URL, output: URL) -> [String] {
+        ["-y", "-i", input.path,
+         "-af", "silenceremove=stop_periods=-1:stop_duration=0.3:stop_threshold=-50dB",
+         output.path]
+    }
+
+    /// Apara o silêncio do FIM da fatia (se houver ffmpeg): sem isso cada
+    /// fronteira carrega o respiro final do TTS e a transição pica. Só o
+    /// fim — o início intacto preserva os tempos das frases, e a duração
+    /// total é medida do arquivo aparado. Troca só quando encolhe de verdade
+    /// (>2 KB), para nunca trocar áudio igual por re-encode. Falha degrada
+    /// em silêncio: mantém o original e a síntese segue.
+    private static func trimTrailingSilence(_ url: URL) {
+        guard let ffmpeg = ffmpegPath else { return }
+        let tmp = url.deletingLastPathComponent()
+            .appendingPathComponent("aparado-\(UUID().uuidString).mp3")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        guard let (status, _) = try? run(
+            ffmpeg, silenceTrimArgs(input: url, output: tmp),
+            timeout: 120),
+            status == 0,
+            let antes = fileSize(url), let depois = fileSize(tmp),
+            depois > 0, antes > depois + 2048
+        else { return }
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.moveItem(at: tmp, to: url)
     }
 
     /// Lê os tempos de frase gravados pelo synth_timing.py.

@@ -47,6 +47,11 @@ Repo público com histórico desde `0aa5658`.
   inteiro do marcador na p9 ("witness would…stand or fall together" some
   da lista filtrada; na integral o marcador liga as 5 frases). Rastro
   pronto, correção pendente.
+- [CÓDIGO] Transição entre fatias: corte prefere fim de parágrafo
+  (`buildChunks` recua ao `paragraphEnd`) + aparo do silêncio final da
+  fatia via ffmpeg (só troca se encolher >2 KB; tempos intactos, duração
+  medida do aparado). Medido num MP3 real do Edge: 5,808 s → 5,602 s.
+  Suíte 123 testes/14 suítes. Neste commit.
 - [MEDIDO] No artigo de teste: 12 marcadores distintos (1–12), 12
   ocorrências — todos anunciados; 0 corpos no arquivo (só números).
 - [LIMITE] Corpos ausentes neste artigo (perícia: sem texto, anotação,
