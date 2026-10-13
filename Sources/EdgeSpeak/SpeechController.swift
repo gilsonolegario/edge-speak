@@ -129,11 +129,31 @@ final class SpeechController: ObservableObject {
             .store(in: &highlightCancellables)
     }
 
+    /// Estado efetivo do streamer num tique do espelho (comparável para
+    /// saber se houve mudança real desde o tique anterior).
+    private struct EstadoEspelhado: Equatable {
+        var playing: Bool
+        var paused: Bool
+        var finished: Bool
+        var starved: Bool
+    }
+    /// Último estado efetivo visto pelo espelho; sem mudança, nada republica.
+    private var lastMirroredState: EstadoEspelhado?
+
     private func mirrorStreamerState() {
         let playing = streamer.isPlaying
         let paused = streamer.isPaused
         if isPlaying != playing { isPlaying = playing }
         if isPaused != paused { isPaused = paused }
+        let estado = EstadoEspelhado(
+            playing: playing, paused: paused,
+            finished: streamer.isFinished, starved: streamer.isStarved)
+        defer { lastMirroredState = estado }
+        // República SÓ quando o estado efetivo muda: o espelho roda a ~10 Hz
+        // via `objectWillChange` e, antes desta guarda, chamava `mostra` a
+        // cada tique — sobrescrevendo em ~100 ms mensagens transitórias
+        // (ex.: "cache limpo" publicado por `clearCache`; achado B1).
+        guard lastMirroredState != estado else { return }
         // Espera com a fila vazia: diz que está gerando, não "tocando" —
         // o silêncio com status de toque parecia travamento.
         if streamer.isStarved, isBusy {
@@ -143,7 +163,7 @@ final class SpeechController: ObservableObject {
         // O status passa a descrever o que está acontecendo de fato. Sem isto,
         // "Tocando…" sobrevivia ao fim do áudio.
         if !isBusy {
-            switch (playing, paused, streamer.isFinished) {
+            switch (playing, paused, estado.finished) {
             case (true, _, _): mostra("status.playing")
             case (_, true, _): mostra("status.paused")
             case (false, false, true): mostra("status.finished")
