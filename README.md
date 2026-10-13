@@ -57,7 +57,7 @@ O que nunca entra no repositório (`.gitignore`): `.build/`, `Build/` (staging c
 
 ## Licenças de terceiros
 
-Piper (voz offline, GPL-3.0) e PyMuPDF (extração, AGPL) viajam com o app — ver CREDITS.md. Enquanto o código for privado e de uso próprio, não há imposição; abrir publicamente exigirá redistribuir sob as mesmas licenças.
+Piper (voz offline, GPL-3.0) e PyMuPDF (extração, AGPL) viajam com o app — ver CREDITS.md. O código próprio está sob GPL-3.0 (LICENSE), que cobre a combinação com esses componentes no artefato montado.
 
 ## Limites conhecidos (2026-10-13)
 

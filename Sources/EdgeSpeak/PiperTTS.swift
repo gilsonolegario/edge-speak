@@ -335,12 +335,13 @@ enum PiperTTS {
         s?.stop()
     }
 
-    /// Encerra sessões órfãs (ex.: após cancelamento).
+    /// Encerra sessões órfãs (ex.: após cancelamento). Mesmo estreitamento
+    /// do EdgeTTS: só sob caminho do app, nunca execução manual alheia.
     static func killRunningProcesses() {
         stopActiveSession()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        p.arguments = ["-f", "piper_synth.py"]
+        p.arguments = ["-f", "[Ee]dge[Ss]peak.*piper_synth\\.py"]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try? p.run()

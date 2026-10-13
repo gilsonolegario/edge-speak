@@ -399,6 +399,9 @@ struct ContentView: View {
                 guard let url = note.object as? URL else { return }
                 load(url: url)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .edgeSpeakClearCache)) { _ in
+                controller.clearCache()
+            }
             .onAppear {
                 // Migra voz que deixou de existir no catálogo (só havia a
                 // multilingual) e saneia valor órfão guardado: sem catálogo o

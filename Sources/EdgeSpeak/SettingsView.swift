@@ -97,13 +97,33 @@ struct SettingsView: View {
         .padding()
     }
 
+    @State private var tamanhoCache: String? = nil
+
     private var advancedTab: some View {
         Form {
-            // PENDENTE: limpar o cache de áudio depende de função nova em CacheDisco.swift (fora do escopo) — item deixado de fora até lá.
-            Text(L.get("settings.noAdvanced", locale: idioma))
-                .foregroundStyle(.secondary)
+            Text(L.get("settings.cacheSize", locale: idioma, args: tamanhoCache ?? "…"))
+            Button(L.get("settings.clearCache", locale: idioma)) {
+                NotificationCenter.default.post(name: .edgeSpeakClearCache, object: nil)
+                // Recarrega o tamanho após a limpeza (fora da main).
+                Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    await recarregaCache()
+                }
+            }
+            .help(L.get("help.clearCacheHelp", locale: idioma))
         }
         .formStyle(.grouped)
         .padding()
+        .task { await recarregaCache() }
+    }
+
+    /// Tamanho do cache fora da main (varredura em disco).
+    private func recarregaCache() async {
+        let bytes = await Task.detached(priority: .utility) {
+            CacheDisco.totalBytes()
+        }.value
+        let texto = bytes >= 1_048_576
+            ? "\(bytes / 1_048_576) MB" : "\(bytes / 1_024) KB"
+        await MainActor.run { tamanhoCache = texto }
     }
 }

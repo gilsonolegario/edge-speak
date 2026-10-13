@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let edgeSpeakOpenFile = Notification.Name("EdgeSpeakOpenFile")
+    static let edgeSpeakClearCache = Notification.Name("EdgeSpeakClearCache")
 }
 
 @main

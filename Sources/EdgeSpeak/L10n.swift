@@ -133,6 +133,10 @@ enum L {
         "settings.footnotes": "Ler notas de rodapé",
         "help.footnotesHelp": "Anuncia o marcador e lê o corpo a seguir; desligado, a nota vira pausa",
         "settings.noAdvanced": "Nenhuma opção avançada disponível no momento.",
+        "settings.cacheSize": "Cache em disco: {0}",
+        "settings.clearCache": "Limpar cache de áudio",
+        "help.clearCacheHelp": "Apaga os áudios guardados, exceto o da leitura atual",
+        "status.cacheCleared": "Cache limpo: {0} liberados",
         "settings.languageLabel": "Idioma",
         // Cadência (EdgeTTS.Rate).
         "rate.normal": "Normal",
@@ -322,6 +326,10 @@ enum L {
         "settings.footnotes": "Read footnotes",
         "help.footnotesHelp": "Announces the marker and reads the body next; off turns notes into pauses",
         "settings.noAdvanced": "No advanced options available right now.",
+        "settings.cacheSize": "Disk cache: {0}",
+        "settings.clearCache": "Clear audio cache",
+        "help.clearCacheHelp": "Deletes stored audio, except the current reading",
+        "status.cacheCleared": "Cache cleared: {0} freed",
         "settings.languageLabel": "Language",
         "rate.normal": "Normal",
         // Speech (ReadAloudFilter.expandFootnoteMarkers).

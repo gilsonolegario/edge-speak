@@ -601,9 +601,11 @@ struct Rate: Equatable, Hashable, Sendable {
     /// Encerra qualquer edge-tts deixado pendente por uma síntese cancelada.
     /// Sem isso, o usuário cancela mas os processos filhos seguem consumindo CPU.
     ///
-    /// Casa pelo nome do script (`synth_timing.py`), que só este app invoca —
-    /// nunca por "python" solto, para não atingir processos alheios. Os
-    /// `Process` criados em `run` também são guardados e encerrados direto.
+    /// Casa pelo script sob caminho do app (bundle, venv de suporte, repo de
+    /// desenvolvimento ou temporário `EdgeSpeak-*`) — nunca por "python"
+    /// solto nem pelo nome puro do script, para não atingir uma execução
+    /// manual do usuário com o mesmo nome em outro diretório. Os `Process`
+    /// criados em `run` também são guardados e encerrados direto.
     static func killRunningProcesses() {
         runningLock.lock()
         let tracked = Array(runningSynth.values)
@@ -613,7 +615,7 @@ struct Rate: Equatable, Hashable, Sendable {
         }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        p.arguments = ["-f", "synth_timing.py"]
+        p.arguments = ["-f", "[Ee]dge[Ss]peak.*synth_timing\\.py"]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try? p.run()

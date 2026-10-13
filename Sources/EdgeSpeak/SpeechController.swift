@@ -647,6 +647,18 @@ final class SpeechController: ObservableObject {
         status = msg
     }
 
+    /// Limpa o cache em disco preservando a leitura corrente (botão da aba
+    /// Avançado, via notificação `.edgeSpeakClearCache`).
+    func clearCache() {
+        let atual = currentKey
+        Task.detached(priority: .utility) {
+            let livres = CacheDisco.clearAll(preserving: atual)
+            let texto = livres >= 1_048_576
+                ? "\(livres / 1_048_576) MB" : "\(max(1, livres / 1_024)) KB"
+            await MainActor.run { self.mostra("status.cacheCleared", texto) }
+        }
+    }
+
     func exportMP3() {        guard let audioURL else {
             mostra("status.noAudioToExport")
             return

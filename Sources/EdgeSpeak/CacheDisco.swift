@@ -104,6 +104,49 @@ enum CacheDisco {
         try? FileManager.default.removeItem(at: base)
     }
 
+    /// Tamanho total ocupado, em bytes (para exibir nos Ajustes).
+    static func totalBytes() -> Int {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return 0 }
+        var total = 0
+        for name in names {
+            let base = dir.appendingPathComponent(name, isDirectory: true)
+            if let walker = fm.enumerator(at: base, includingPropertiesForKeys: [.fileSizeKey]) {
+                for case let url as URL in walker {
+                    total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                }
+            }
+        }
+        return total
+    }
+
+    /// Apaga todas as entradas, exceto a chave em uso (nil = todas).
+    /// Devolve os bytes liberados. Fora da main (varre e apaga em disco).
+    @discardableResult
+    static func clearAll(preserving key: String?) -> Int {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return 0 }
+        var livres = 0
+        for name in names {
+            if let key, name == key { continue }
+            let base = dir.appendingPathComponent(name, isDirectory: true)
+            livres += tamanhoDe(base)
+            try? fm.removeItem(at: base)
+        }
+        return livres
+    }
+
+    private static func tamanhoDe(_ base: URL) -> Int {
+        var total = 0
+        if let walker = FileManager.default.enumerator(
+            at: base, includingPropertiesForKeys: [.fileSizeKey]) {
+            for case let url as URL in walker {
+                total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            }
+        }
+        return total
+    }
+
     /// Agenda a poda fora da thread corrente e no máximo 1x por minuto.
     private static func schedulePrune(preserving key: String) {
         lock.lock()
