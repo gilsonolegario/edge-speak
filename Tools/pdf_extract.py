@@ -60,9 +60,9 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        import fitz
+        import pymupdf as fitz
     except ImportError:
-        print("pdf_extract: PyMuPDF (fitz) não instalado", file=sys.stderr)
+        print("pdf_extract: PyMuPDF não instalado", file=sys.stderr)
         return 2
 
     try:
