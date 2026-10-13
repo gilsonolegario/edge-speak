@@ -52,6 +52,17 @@ Repo público com histórico desde `0aa5658`.
   fatia via ffmpeg (só troca se encolher >2 KB; tempos intactos, duração
   medida do aparado). Medido num MP3 real do Edge: 5,808 s → 5,602 s.
   Suíte 123 testes/14 suítes. Neste commit.
+- [CÓDIGO] Auditoria Big Pickle, onda 1+2 (conferência do orquestrador,
+  suíte 128/16): M1 `isStarved` conta como tocando no salto; M5 inserção
+  da nota contabiliza remoções; B1 espelho só republica em mudança; A2
+  JSON de tempos ilegível avisa no status; A1 leitura de filho com poll
+  + SIGKILL (via Muse); M2/B4/B6 higiene (fail, import, SIGKILL).
+  Commits `34e13d4`…`259ef81`.
+- [ABERTO] Auditoria, ondas 3–5: M4 purga do Piper, B2 pool do Edge, B3
+  WAV, M3 cache de atributos, B5 clique do texto. M6 fora (coberto pela
+  tradução). Tradução: rebase pausado em conflito (17cf999), retomar após
+  as ondas. Fluência (N4 filtrada + hífen com evidência interna): merge
+  pendente do worktree fluencia.
 - [MEDIDO] No artigo de teste: 12 marcadores distintos (1–12), 12
   ocorrências — todos anunciados; 0 corpos no arquivo (só números).
 - [LIMITE] Corpos ausentes neste artigo (perícia: sem texto, anotação,
