@@ -225,7 +225,11 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard chunk < queue.count else { return }
         // `isFinished` conta como "tocar": arrastar para trás depois que o
         // áudio acabou deve voltar a reproduzir, e não ficar parado.
-        let wasPlaying = isPlaying || isPaused || isFinished
+        // `isStarved` também: fila esvaziada com síntese em curso é espera,
+        // não pausa — sem isto, o `else` abaixo regravava "pausado" logo após
+        // o `playChunk` iniciar o áudio da fatia alvo, e o `play()` seguinte
+        // virava no-op (`player.isPlaying` já verdadeiro): a UI mentia.
+        let wasPlaying = isPlaying || isPaused || isFinished || isStarved
 
         if chunk != nextIndex {
             current?.stop()
