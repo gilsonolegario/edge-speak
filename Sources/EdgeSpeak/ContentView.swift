@@ -199,7 +199,7 @@ struct ContentView: View {
         return wordAligner.caixa(
             frase: controller.highlightIndex,
             alvo: controller.highlightWordIndex,
-            faladas: seg.words,
+            faladas: seg.words.map(\.text),
             pdf: phrase.words)
     }
 
@@ -322,7 +322,13 @@ struct ContentView: View {
     }
 
     var body: some View {
-        textArea
+        // Contêiner de tipo ESTÁVEL (`Container`, nunca trocado) entre a janela e
+        // o conteúdo que muda de forma (vazio → editor → PDF → painel). Sem
+        // esta âncora, cada troca de conteúdo recria a raiz da vista e a barra
+        // de ferramentas se perde na transição — medida: sem PDF a barra
+        // aparecia (7 botões na árvore de acessibilidade), abrindo um PDF
+        // ela sumia. O tipo do contêiner não muda, então a barra sobrevive.
+        Container { textArea }
             .padding(.leading, 16)
             .padding(.trailing, 16)
             .padding(.top, 16)
@@ -539,7 +545,13 @@ struct ContentView: View {
         revealToken += 1
         if controller.jumpToSegment(index) { return }
         guard !controller.hasAudio, !controller.isBusy else { return }
-        controller.play(phrases: playList(), voice: voice, rate: rate)
+        // Sem áudio nenhum, sintetiza A PARTIR da frase clicada. Com a lista
+        // inteira, o tocador já tinha o começo do documento tocando antes de a
+        // fatia do trecho clicado existir — era isso que fazia o play começar
+        // pelo início em vez do ponto do clique.
+        let lista = playList()
+        guard let pos = lista.firstIndex(where: { $0.index == index }) else { return }
+        controller.play(phrases: Array(lista[pos...]), voice: voice, rate: rate)
         controller.jumpToSegment(index)
     }
 
@@ -787,4 +799,16 @@ struct ContentView: View {
 
         return event
     }
+}
+
+/// Contêiner de tipo fixo, só para dar à janela uma raiz que não muda de
+/// identidade quando o conteúdo muda (vazio → editor → PDF → painel).
+///
+/// Existe por causa da barra de ferramentas: aplicada direto ao conteúdo que
+/// troca de forma, ela se perdia na troca (comprovado: sem PDF a barra
+/// aparecia, abrindo um PDF sumia). Aqui a raiz é sempre a mesma.
+private struct Container<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View { content() }
 }

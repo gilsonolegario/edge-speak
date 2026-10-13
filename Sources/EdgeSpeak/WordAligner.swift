@@ -1,108 +1,125 @@
 import CoreGraphics
 import Foundation
 
-/// Casa a palavra falada com a caixa correspondente no PDF, em uma única
-/// passada que só anda para frente.
+/// Alinha a sequência de palavras FALADAS com a sequência de palavras do PDF,
+/// e diz qual caixa corresponde a cada palavra falada.
 ///
-/// Por que isto é um objeto e não um cálculo a cada quadro: o casamento tem de
-/// ser monotônico ao longo da leitura INTEIRA da frase. Recalculado do zero a
-/// cada tique (o destaque repinta 10x por segundo), uma palavra que não casa
-/// no meio da frase deixava o cursor parado e todas as seguintes passavam a
-/// casar com posições erradas — o amarelo voltava para a ocorrência anterior e
-/// produzia os "pequenos saltos" que o dono viu.
+/// Por que alinhar e não procurar palavra a palavra: a leitura em voz alta
+/// NUNCA tem a mesma sequência de palavras do PDF. Onde o PDF põe um símbolo,
+/// a voz põe uma frase — "∃uT (u,o)" vira "there exists u, such that, T of
+/// u" (6 palavras para 3 caixas). Procurar palavra a palavra obrigava as
+/// palavras de expansão a casar com alguma caixa do PDF, e como elas são
+/// palavras COMUNS ("and", "such", "there"), elas roubavam a caixa de uma
+/// palavra de prosa logo adiante: o amarelo ia para o lado errado. Era esse o
+/// "pula de lado a lado" que o dono viu.
 ///
-/// E por que a busca usa a VIZINHA: palavra idêntica repetida ("the … the")
-/// não se distingue sozinha — é o par com a seguinte e a continuação da
-/// anterior que dizem qual das duas é a fala. A palavra isolada é o último
-/// recurso.
+/// Por que alinhamento global (Needleman–Wunsch) e não guloso: casar palavra
+/// a palavra resolve o caso comum, mas quebra justamente aqui, onde o
+/// comprimento das duas sequências é diferente por construção. O alinhamento
+/// global prefere deixar a palavra de expansão SEM caixa a distorcer o resto,
+/// porque distorcer custa mais caro.
 ///
-/// Regras:
-/// - Trocar de frase (ou o índice de palavra andar para trás, como num salto)
-///   reinicia o cursor: a lista de caixas é outra.
-/// - Palavra falada sem caixa correspondente é pulada SEM consumir posição do
-///   PDF — senão as palavras seguintes roubariam a ocorrência que era dela.
-/// - O mapa palavra→caixa fica guardado: pedir a mesma palavra de novo não
-///   recalcula nada.
+/// Como fica em voz alta: as palavras de expansão não têm caixa (o amarelo
+/// pisca entre elas, sem pular); as palavras reais ficam na caixa certa. É a
+/// consequência honesta de ler fórmulas por extenso, e é o que se espera de
+/// um karaokê.
+///
+/// Custo por operação:
+/// - casar palavras iguais: 0
+/// - pular (expansão sem caixa, ou caixa sem palavra falada): 1
+/// - trocar (par não igual): 3 — mais caro que pular, porque trocar distorce
+///   a sequência; pular apenas admite que não havia caixa.
 @MainActor
 final class WordAligner {
     /// Caixa do PDF de cada palavra da frase, na ordem de leitura.
     typealias Caixa = TextImport.Phrase.WordBox
 
-    /// Índice global da frase a que o cursor pertence; -1 = nenhum.
-    private var frase: Int = -1
-    /// Próxima palavra falada ainda não processada.
-    private var proxima: Int = 0
-    /// Posição no PDF a partir da qual se procura (nunca retrocede).
-    private var cursor: Int = 0
-    /// Mapa palavra falada → índice da caixa no PDF.
-    private var mapa: [Int: Int] = [:]
+    private static let custoPular: Int = 1
+    private static let custoTrocar: Int = 3
 
     /// Reduz a palavra ao que compara: minúsculas, só letras e dígitos.
     static func normalizada(_ s: String) -> String {
         s.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
-    /// Caixa da palavra `alvo` da frase `fraseAlvo`. `nil` quando não há caixa
-    /// casada — nunca uma caixa vizinha inventada.
-    func caixa(frase fraseAlvo: Int, alvo: Int, faladas: [EdgeTTS.Segment.Word], pdf: [Caixa]) -> CGRect? {
-        if fraseAlvo != frase { reinicia(frase: fraseAlvo) }
-        if alvo < proxima { reinicia(frase: fraseAlvo) }
-        while proxima <= alvo, proxima < faladas.count {
-            casa(palavra: proxima, faladas: faladas, pdf: pdf)
-            proxima += 1
-        }
-        guard let j = mapa[alvo], j < pdf.count else { return nil }
-        return pdf[j].rect
-    }
+    /// Índice da caixa do PDF que corresponde a cada palavra falada; `nil`
+    /// quando a palavra é de expansão (não tem caixa própria).
+    ///
+    /// Alinhamento global com desempate explícito: numa diagonal com mesmo
+    /// custo, prefere CASAR (a palavra é a mesma das duas pontas), depois
+    /// pular a palavra falada (expansão), depois pular a caixa do PDF. A
+    /// preferência por casar é o que mantém `the … the` na ocorrência certa.
+    func alinha(faladas: [String], pdf: [Caixa]) -> [Int?] {
+        let n = faladas.count
+        let m = pdf.count
+        guard n > 0, m > 0 else { return [Int?](repeating: nil, count: n) }
 
-    /// Procura a caixa da palavra `i` a partir do cursor, nesta ordem:
-    /// 1. continuação da palavra anterior (a mais forte: já sabemos onde a
-    ///    anterior caiu, e a fala segue em ordem);
-    /// 2. par com a palavra seguinte (desambigua repetidas);
-    /// 3. palavra sozinha.
-    /// Sem casamento: não consome a posição do PDF.
-    private func casa(palavra i: Int, faladas: [EdgeTTS.Segment.Word], pdf: [Caixa]) {
-        let alvo = Self.normalizada(faladas[i].text)
-        guard !alvo.isEmpty else { return }
+        let faladasNorm = faladas.map(Self.normalizada)
+        let pdfNorm = pdf.map { Self.normalizada($0.text) }
 
-        if let anterior = mapa[i - 1], anterior + 1 < pdf.count,
-           Self.normalizada(pdf[anterior + 1].text) == alvo {
-            guarda(i, j: anterior + 1)
-            return
-        }
-        if i + 1 < faladas.count {
-            let seguinte = Self.normalizada(faladas[i + 1].text)
-            if !seguinte.isEmpty {
-                var j = cursor
-                while j + 1 < pdf.count {
-                    if Self.normalizada(pdf[j].text) == alvo,
-                       Self.normalizada(pdf[j + 1].text) == seguinte {
-                        guarda(i, j: j)
-                        return
-                    }
-                    j += 1
-                }
+        // dp[i][j] = custo de alinhar as primeiras i faladas com as j caixas.
+        var dp = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
+        for i in 1...n { dp[i][0] = i * Self.custoPular }
+        for j in 1...m { dp[0][j] = j * Self.custoPular }
+        for i in 1...n {
+            for j in 1...m {
+                let casar = faladasNorm[i - 1] == pdfNorm[j - 1]
+                    ? dp[i - 1][j - 1]
+                    : dp[i - 1][j - 1] + Self.custoTrocar
+                let pularFala = dp[i - 1][j] + Self.custoPular
+                let pularCaixa = dp[i][j - 1] + Self.custoPular
+                dp[i][j] = min(casar, pularFala, pularCaixa)
             }
         }
-        var j = cursor
-        while j < pdf.count {
-            if Self.normalizada(pdf[j].text) == alvo {
-                guarda(i, j: j)
-                return
+
+        // Backtrace: de (n, m) até (0, 0). Empate vai para casar.
+        var mapa = [Int?](repeating: nil, count: n)
+        var i = n
+        var j = m
+        while i > 0 && j > 0 {
+            let casar = faladasNorm[i - 1] == pdfNorm[j - 1]
+            let custoCasar = casar ? dp[i - 1][j - 1] : dp[i - 1][j - 1] + Self.custoTrocar
+            if dp[i][j] == custoCasar {
+                if casar { mapa[i - 1] = j - 1 }
+                i -= 1
+                j -= 1
+            } else if dp[i][j] == dp[i - 1][j] + Self.custoPular {
+                i -= 1 // expansão: sem caixa
+            } else {
+                j -= 1 // caixa sem palavra falada
             }
-            j += 1
         }
+        return mapa
     }
 
-    private func guarda(_ palavra: Int, j: Int) {
-        mapa[palavra] = j
-        cursor = j + 1
+    /// Atalho de teste: caixa da palavra `alvo` já alinhada.
+    func caixa(alinhado: [Int?], alvo: Int, pdf: [Caixa]) -> CGRect? {
+        guard alvo >= 0, alvo < alinhado.count,
+              let k = alinhado[alvo], k >= 0, k < pdf.count
+        else { return nil }
+        return pdf[k].rect
     }
 
-    private func reinicia(frase nova: Int) {
-        frase = nova
-        proxima = 0
-        cursor = 0
-        mapa = [:]
+    // MARK: - Cache por frase
+
+    /// Frase do alinhamento guardado e o próprio mapa.
+    private var fraseAtual = -1
+    private var mapa: [Int?] = []
+    private var falaContagem = -1
+    private var caixaContagem = -1
+
+    /// Caixa da palavra `alvo` da frase `frase`, alinhando uma vez e reaproveitando
+    /// enquanto for a mesma frase. Chamado a cada tique do destaque (10 Hz): o
+    /// alinhamento é O(n·m) e não pode rodar a cada quadro.
+    func caixa(frase: Int, alvo: Int, faladas: [String], pdf: [Caixa]) -> CGRect? {
+        if frase != fraseAtual
+            || faladas.count != falaContagem
+            || pdf.count != caixaContagem {
+            fraseAtual = frase
+            falaContagem = faladas.count
+            caixaContagem = pdf.count
+            mapa = alinha(faladas: faladas, pdf: pdf)
+        }
+        return caixa(alinhado: mapa, alvo: alvo, pdf: pdf)
     }
 }
