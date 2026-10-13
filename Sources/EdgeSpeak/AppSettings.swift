@@ -147,3 +147,76 @@ enum AppSetting {
         (PiperTTS.offlineVoices + englishVoices + portugueseVoices).contains(voice)
     }
 }
+
+/// Posição de leitura salva por documento+voz, para retomar onde parou.
+///
+/// Desenho: UM dicionário `[chave: segundos]` sob `defaultsKey`; cada entrada
+/// junta o identificador do documento (URL do arquivo) e a voz, então trocar
+/// de voz não puxa a posição da outra. O padrão "sem posição" é a AUSÊNCIA da
+/// entrada (não zero): reabrir sem nunca ter pausado/parado não busca nada.
+///
+/// Tudo passa por `defaults` injetável para o round-trip ser testável sem UI
+/// (basta uma suite efêmera de `UserDefaults`).
+enum ReadingPositionStore {
+    /// Chave do dicionário no `UserDefaults`.
+    static let defaultsKey = "readingPositions"
+
+    /// Abaixo disto, retomar é o mesmo que começar do zero — nem guarda nem busca.
+    static let minimumResume: TimeInterval = 3
+
+    /// Chave estável da entrada: documento + voz. Sem a cadência de propósito:
+    /// o áudio pode mudar de duração entre cadências, e a guarda `shouldResume`
+    /// já barra qualquer busca além do medido.
+    static func key(documentID: String, voice: String) -> String {
+        "\(documentID)##\(voice)"
+    }
+
+    /// Segundos guardados, ou nil quando nunca pausou/parou ali ("sem posição").
+    static func load(
+        documentID: String, voice: String,
+        defaults: UserDefaults = .standard
+    ) -> TimeInterval? {
+        let pos = doubles(defaults.dictionary(forKey: defaultsKey) ?? [:])[key(documentID: documentID, voice: voice)]
+        guard let pos, pos > 0 else { return nil }
+        return pos
+    }
+
+    /// Guarda a posição (chamar na pausa/parada, com o relógio ainda vivo).
+    static func save(
+        documentID: String, voice: String, position: TimeInterval,
+        defaults: UserDefaults = .standard
+    ) {
+        guard position >= minimumResume else { return }
+        var all = doubles(defaults.dictionary(forKey: defaultsKey) ?? [:])
+        all[key(documentID: documentID, voice: voice)] = position
+        defaults.set(all, forKey: defaultsKey)
+    }
+
+    /// Esquece a posição (leitura concluída ou transcrição descartada).
+    static func clear(
+        documentID: String, voice: String,
+        defaults: UserDefaults = .standard
+    ) {
+        var all = doubles(defaults.dictionary(forKey: defaultsKey) ?? [:])
+        all.removeValue(forKey: key(documentID: documentID, voice: voice))
+        defaults.set(all, forKey: defaultsKey)
+    }
+
+    /// Só retoma quando há o que retomar E o áudio medido já cobre o ponto —
+    /// nunca busca além do que chegou (senão, começa do zero).
+    static func shouldResume(saved: TimeInterval?, knownDuration: TimeInterval) -> Bool {
+        guard let saved, saved >= minimumResume else { return false }
+        guard knownDuration > 0, saved <= knownDuration else { return false }
+        return true
+    }
+
+    /// Lê o dicionário do `UserDefaults` tolerando número vindo como Double ou NSNumber.
+    private static func doubles(_ dict: [String: Any]) -> [String: Double] {
+        var out: [String: Double] = [:]
+        for (k, v) in dict {
+            if let d = v as? Double { out[k] = d }
+            else if let n = v as? NSNumber { out[k] = n.doubleValue }
+        }
+        return out
+    }
+}

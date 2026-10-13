@@ -17,13 +17,18 @@ enum TextImport {
             /// partir a frase na virada de página em vez de desenhar
             /// caixas de duas páginas na primeira.
             let page: Int?
+            /// Sobrescrito vindo do extrator (bit do span ou pequeno+elevado).
+            /// Marcador de nota com `sup == true` sempre vence na
+            /// `marcaAnterior`; sem ele, vale a regex textual como reserva.
+            let sup: Bool
 
             /// `init` explícito (não memberwise): neste toolchain, membro
             /// com default não entra no inicializador sintetizado.
-            init(text: String, rect: CGRect, page: Int? = nil) {
+            init(text: String, rect: CGRect, page: Int? = nil, sup: Bool = false) {
                 self.text = text
                 self.rect = rect
                 self.page = page
+                self.sup = sup
             }
         }
         let index: Int
@@ -86,8 +91,8 @@ enum TextImport {
             // ligados aos marcadores, rótulos soltos descartados) antes de
             // repartir em frases de leitura. É aqui que moram as próximas
             // separações (fórmulas densas, legendas) sem tocar no leitor.
-            let frases = resolveFootnotes(makePhrases(from: segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page) }) }))
-            let frasesFiltradas = resolveFootnotes(makePhrases(from: filtered(segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page) }) }, isPDF: true)))
+            let frases = resolveFootnotes(makePhrases(from: segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page, sup: $0.sup) }) }))
+            let frasesFiltradas = resolveFootnotes(makePhrases(from: filtered(segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page, sup: $0.sup) }) }, isPDF: true)))
             return (
                 filtrado: join(frasesFiltradas), integral: join(frases), pdf: doc,
                 frases: frases, frasesFiltradas: frasesFiltradas
@@ -199,6 +204,14 @@ enum TextImport {
 ///   frase do marcador — é lido direto após o anúncio, como o dono pediu;
 /// - sem marcador, o corpo fica intacto onde está (pode ser data ou
 ///   enumeração: mexer seria corrupção, e a leitura segue correta).
+///
+/// Dificuldade documentada (2026-10-13, medida no artigo de teste): o corpo
+/// pode simplesmente NÃO existir no arquivo — nem na camada de texto, nem
+/// em anotação, imagem, desenho ou glifo sem mapa (só os números soltos no
+/// rodapé, sem fonte menor que denuncie corpo). Nesse caso não há o que ler
+/// após o anúncio, e não se inventa: o marcador é anunciado e o texto
+/// segue. Verificado por perícia (fontes por tamanho no documento inteiro,
+/// rawdict do rodapé, últimas páginas só com bibliografia).
 /// Os índices das frases que ficam NÃO mudam (são propriedade, não posição)
 /// — destaque e salto por índice continuam valendo.
     static func resolveFootnotes(_ phrases: [Phrase]) -> [Phrase] {
@@ -242,10 +255,32 @@ enum TextImport {
     /// Posição da frase com o marcador N: mesma página primeiro (em ordem),
     /// senão a anterior mais próxima no documento (notas de fim). `nil` sem
     /// marcador — e sem marcador não se move nada.
+    ///
+    /// O sinal geométrico (`sup`) vence sempre: palavra sobrescrita com o
+    /// número N é marcador mesmo sem cola textual (".7"/",7"/"o7"). A regex
+    /// textual segue como reserva (via sem PyMuPDF, sem `sup`).
     private static func marcaAnterior(
         numero n: Int, pagina: Int?, ate pos: Int, em lista: [Phrase], excluindo: Int
     ) -> Int? {
         let ns = String(n)
+        // Palavra sobrescrita cujo miolo é exatamente N ("7", "7.", ".7").
+        func temSup(_ ph: Phrase) -> Bool {
+            ph.words.contains { w in
+                guard w.sup else { return false }
+                let miolo = w.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: .punctuationCharacters)
+                return miolo == ns
+            }
+        }
+        if let pagina {
+            for (i, ph) in lista.enumerated() where i != excluindo && ph.page == pagina {
+                if temSup(ph) { return i }
+            }
+        }
+        for i in stride(from: pos - 1, through: 0, by: -1) {
+            if temSup(lista[i]) { return i }
+        }
+        // Reserva textual (via sem PyMuPDF, sem `sup`).
         let formas = [
             #"(?<=[A-Za-zÀ-ÿ\)\]"'”’])\."# + ns + #"(?![\dA-Za-zÀ-ÿ.])"#,
             #"(?<=[A-Za-zÀ-ÿ\)\]"'”’]),"# + ns + #"(?![\dA-Za-zÀ-ÿ.])"#,

@@ -17,6 +17,13 @@ struct FootnoteTests {
         TextImport.Phrase(index: i, text: texto, page: pagina, rects: [])
     }
 
+    private func fraseSup(_ i: Int, _ texto: String, pagina: Int?, palavras: [(String, Bool)]) -> TextImport.Phrase {
+        let caixas = palavras.map { (t, s) in
+            TextImport.Phrase.WordBox(text: t, rect: .zero, page: pagina, sup: s)
+        }
+        return TextImport.Phrase(index: i, text: texto, page: pagina, rects: [], words: caixas)
+    }
+
     /// Corpo na mesma página vai para logo após a frase do marcador, sem o
     /// número e marcado com o número da nota.
     @Test func corpoVaiParaAposOMarcador() {
@@ -94,5 +101,42 @@ struct FootnoteTests {
     /// Texto acadêmico pressupõe nota anunciada: default ligado.
     @Test func defaultLeNotas() {
         #expect(AppSetting.footnoteDefault == true)
+    }
+
+    /// Sinal geométrico vence: marcador sobrescrito liga o corpo mesmo sem
+    /// cola textual (".7"/",7"/"o7") na frase.
+    @Test func marcadorSobrescritoLigaSemColaTextual() {
+        let lista = [
+            fraseSup(0, "argumento segue aqui", pagina: 0, palavras: [("argumento", false), ("7", true), ("segue", false)]),
+            frase(1, "outra frase no meio", pagina: 0),
+            frase(2, "7 Autores afirmam isto aqui", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(fora.map(\.index) == [0, 2, 1])
+        #expect(fora[1].notaNumero == 7)
+    }
+
+    /// Sobrescrito com número diverso não casa (não vira marcador da nota).
+    @Test func sobrescritoDeOutroNumeroNaoCasa() {
+        let lista = [
+            fraseSup(0, "argumento segue aqui", pagina: 0, palavras: [("argumento", false), ("8", true)]),
+            frase(1, "7 Autores afirmam isto aqui", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(fora.count == 2)
+        #expect(fora[1].notaNumero == nil)
+        #expect(fora[1].text.hasPrefix("7 "))
+    }
+
+    /// Palavra não sobrescrita com o número não é marcador geométrico (a
+    /// reserva textual segue valendo só com cola: sem cola, não move).
+    @Test func numeroSemSupNaoViraMarcadorGeometrico() {
+        let lista = [
+            fraseSup(0, "argumento segue aqui", pagina: 0, palavras: [("argumento", false), ("7", false)]),
+            frase(1, "7 Autores afirmam isto aqui", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(fora.map(\.index) == [0, 1])
+        #expect(fora[1].notaNumero == nil)
     }
 }

@@ -43,6 +43,54 @@ struct StreamingProofTests {
         #expect(player.currentSegmentIndex == 5)
     }
 
+    /// Trilho e ±15 s com durações ainda não medidas (streaming): sem pular
+    /// fatia. Com os offsets zerados, a busca do `seek(to:)` parava na ÚLTIMA
+    /// fatia de mesmo início e pulava o áudio das anteriores — a variante no
+    /// trilho do clique que lia outra parte. Agora recua à primeira de mesmo
+    /// início (ponto honesto: fim do trecho medido, sem pular nada). Com
+    /// durações conhecidas os inícios são estritos e nada muda.
+    @Test func trilhoSemDuracoesNaoPulaFatia() {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EdgeSpeak-prova-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func wav(_ nome: String) -> URL {
+            let url = dir.appendingPathComponent(nome)
+            var data = Data()
+            func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+            func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+            let amostras = 8000 // 1 s de silêncio, 8 kHz mono 16 bits
+            data.append(contentsOf: "RIFF".utf8); u32(36 + UInt32(amostras * 2)); data.append(contentsOf: "WAVE".utf8)
+            data.append(contentsOf: "fmt ".utf8); u32(16); u16(1); u16(1); u32(8000); u32(16000); u16(2); u16(16)
+            data.append(contentsOf: "data".utf8); u32(UInt32(amostras * 2))
+            data.append(Data(count: amostras * 2))
+            try? data.write(to: url)
+            return url
+        }
+        let player = StreamingPlayer()
+        // Sem durações (nil): só a 1ª fatia mede ao tocar; as outras seguem
+        // zeradas até as sondas em fundo — sem ponto de suspensão até aqui,
+        // elas ainda estão zeradas, que é a condição do defeito.
+        player.start(urls: [wav("t0.wav")], durations: nil, chunkSegments: [[
+            EdgeTTS.Segment(start: 0, duration: 1, text: "zero", index: 0, page: nil, rects: []),
+        ]])
+        player.enqueue(urls: [wav("t1.wav"), wav("t2.wav")], durations: nil, chunkSegments: [[
+            EdgeTTS.Segment(start: 0, duration: 1, text: "um", index: 1, page: nil, rects: []),
+        ], [
+            EdgeTTS.Segment(start: 0, duration: 1, text: "dois", index: 2, page: nil, rects: []),
+        ]])
+        // Ir ao fim do medido (é onde o +15 s grampeia): cai na 1ª fatia não
+        // medida, sem pular para a última. Antes, caía na fatia 2.
+        player.seek(to: player.knownDuration)
+        #expect(player.currentChunkIndex == 1)
+        #expect(player.currentSegmentIndex == 1)
+        #expect(player.isFinished == false)
+        // Trilho no zero continua na 1ª fatia, com estado consistente.
+        player.seek(to: 0)
+        #expect(player.currentChunkIndex == 0)
+        #expect(player.isFinished == false)
+    }
+
     /// As fatias terminam fora de ordem; a entrega precisa sair 0..N.
     @Test func entregaEmOrdem() {
         let total = 10

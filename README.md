@@ -2,7 +2,7 @@
 
 Leitor de PDF e texto com leitura em voz alta em fluxo, para macOS (SwiftUI, macOS 14+). Cada fatia sintetizada começa a tocar assim que fica pronta, sem esperar o documento inteiro — num PDF de 300 páginas a voz entra em segundos. A frase em leitura fica destacada no PDF e no painel de texto; com voz online, a palavra em leitura também é destacada (karaokê).
 
-Estado: em desenvolvimento ativo, com 88 testes em 10 suítes verdes. O contrato técnico entre camadas (arquivos, funções e regras) está no INTERFACE.md; créditos e licenças de terceiros, no CREDITS.md.
+Estado: em desenvolvimento ativo, com 96 testes em 12 suítes verdes. O contrato técnico entre camadas (arquivos, funções e regras) está no INTERFACE.md; créditos e licenças de terceiros, no CREDITS.md.
 
 ## Motores de voz
 
@@ -37,7 +37,7 @@ Desenho do IINA. Toolbar no topo (Abrir, seletor de voz, menu Opções com segui
 
 Atalhos: Enter alterna play/pausa; Espaço faz o mesmo fora do editor e do PDF; ⌥←/⌥→ pulam 15 s; ⌘. interrompe a síntese.
 
-Ajustes (⌘,) em três abas: **Leitura** (voz, ritmo, seguir leitura, idioma PT/EN), **Texto** (fonte, texto integral, ler notas de rodapé) e **Avançado** (vazia por enquanto). Tudo persiste entre sessões. A interface existe nos dois idiomas com troca na hora (catálogo compilado, padrão PT); nomes de voz e mensagens de progresso dos motores seguem no idioma de origem.
+Ajustes (⌘,) em três abas: **Leitura** (voz, ritmo, seguir leitura, idioma PT/EN), **Texto** (fonte, texto integral, ler notas de rodapé) e **Avançado** (tamanho do cache em disco e botão de limpeza). Tudo persiste entre sessões. A interface existe nos dois idiomas com troca na hora (catálogo compilado, padrão PT); nomes de voz e mensagens de progresso dos motores seguem no idioma de origem.
 
 Arquivos abrem pelo botão Abrir (PDF, Markdown, texto), por duplo-clique com "Abrir com o EdgeSpeak", por arraste ao ícone e por argumento de linha de comando.
 
@@ -63,7 +63,6 @@ Piper (voz offline, GPL-3.0) e PyMuPDF (extração, AGPL) viajam com o app — v
 
 - Os primeiros segundos de áudio podem tocar sem destaque no PDF — causa ainda não isolada (a fatia chega e toca antes de o destaque assentar; reprodutível mas não explicada).
 - Corpos de nota de rodapé em PDFs cuja camada de texto não os traz (como o artigo de teste): o marcador é anunciado, o corpo não existe para ser lido. O pipeline de ligação marcador↔corpo está pronto e testado com listas sintéticas.
-- Aba Avançado dos Ajustes sem itens.
 - Voz online depende do endpoint da Microsoft; indisponibilidade global aparece como mensagem, não como travamento.
 
 ## Melhorias futuras sugeridas

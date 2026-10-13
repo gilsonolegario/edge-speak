@@ -26,7 +26,7 @@ enum PDFTextExtractor {
         let maxY: CGFloat
         let page: Int
         /// Palavras da linha com caixas (via PyMuPDF); vazio na via PDFKit.
-        var words: [(text: String, box: CGRect, page: Int)] = []
+        var words: [(text: String, box: CGRect, page: Int, sup: Bool)] = []
         /// Limites da coluna a que a linha pertence, definidos na ordem de
         /// leitura (XY-cut). Sem isso, o recuo e a "linha cheia" seriam medidos
         /// contra a largura da página inteira e errariam em duas colunas.
@@ -53,17 +53,17 @@ enum PDFTextExtractor {
     /// A lógica de XY-cut, cabeçalho/rodapé, parágrafos e hífen é a mesma do
     /// `extract`: a página é a da primeira linha de cada parágrafo, e os
     /// rects são só os dessa página (o resto do cruzamento é ignorado).
-    static func extractSegments(_ document: PDFDocument) -> [(text: String, page: Int, rects: [CGRect], words: [(text: String, box: CGRect, page: Int)])] {
+    static func extractSegments(_ document: PDFDocument) -> [(text: String, page: Int, rects: [CGRect], words: [(text: String, box: CGRect, page: Int, sup: Bool)])] {
         let pages = (0..<document.pageCount).compactMap { document.page(at: $0) }
 
         var perPage: [[Line]] = []
         // PyMuPDF primeiro (palavras com caixas: sem palavras coladas);
         // PDFKit como reserva (sem Python ou sem PyMuPDF).
         if let url = document.documentURL,
-           let ext = PdfWords.lines(pdfURL: url, pageCount: document.pageCount),
+           let ext = PdfWords.linesWithSup(pdfURL: url, pageCount: document.pageCount),
            ext.count == pages.count {
             perPage = ext.enumerated().map { (i, lines) in
-                lines.compactMap { lineFromExternal(text: $0.text, box: $0.box, words: $0.words.map { (text: $0.text, box: $0.box, page: i) }, pageIndex: i) }
+                lines.compactMap { lineFromExternal(text: $0.text, box: $0.box, words: $0.words.map { (text: $0.text, box: $0.box, page: i, sup: $0.sup) }, pageIndex: i) }
             }
         } else {
             for (index, page) in pages.enumerated() {
@@ -131,7 +131,7 @@ enum PDFTextExtractor {
 
     /// Uma linha vinda do PyMuPDF, com o mesmo tratamento da via PDFKit
     /// (tira índice de nota, descarta vazia). Nil = descartar.
-    private static func lineFromExternal(text: String, box: CGRect, words: [(text: String, box: CGRect, page: Int)], pageIndex: Int) -> Line? {
+    private static func lineFromExternal(text: String, box: CGRect, words: [(text: String, box: CGRect, page: Int, sup: Bool)], pageIndex: Int) -> Line? {
         let semNota = text.replacingOccurrences(
             of: #"[⁰¹²³⁴⁵⁶⁷⁸⁹]+"#, with: "", options: .regularExpression)
         let trimmed = semNota.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -279,7 +279,7 @@ enum PDFTextExtractor {
 
     // MARK: - Parágrafos
 
-    private static func paragraphs(from lines: [Line], leading: CGFloat) -> [(text: String, page: Int, rects: [CGRect], words: [(text: String, box: CGRect, page: Int)])] {
+    private static func paragraphs(from lines: [Line], leading: CGFloat) -> [(text: String, page: Int, rects: [CGRect], words: [(text: String, box: CGRect, page: Int, sup: Bool)])] {
         guard !lines.isEmpty else { return [] }
 
         let globalLeft = median(lines.map { $0.minX }) ?? 0
@@ -301,7 +301,7 @@ enum PDFTextExtractor {
             line.colRight > line.colLeft ? line.columnWidth : max(1, globalRight - globalLeft)
         }
 
-        var result: [(text: String, page: Int, rects: [CGRect], words: [(text: String, box: CGRect, page: Int)])] = []
+        var result: [(text: String, page: Int, rects: [CGRect], words: [(text: String, box: CGRect, page: Int, sup: Bool)])] = []
         var current = ""
         var currentPage = 0
         var currentLines: [Line] = []
@@ -312,7 +312,7 @@ enum PDFTextExtractor {
             let pageLines = currentLines.filter { $0.page == currentPage }
             let rects = pageLines.map { $0.box }
             let words = pageLines.flatMap { line in
-                line.words.map { (text: $0.text, box: $0.box, page: line.page) }
+                line.words.map { (text: $0.text, box: $0.box, page: line.page, sup: $0.sup) }
             }
             result.append((current, currentPage, rects, words))
         }

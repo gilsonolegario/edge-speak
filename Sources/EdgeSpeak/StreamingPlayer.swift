@@ -190,10 +190,12 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     /// Salta para um instante global. Serve tanto para arrastar a barra quanto
-    /// para pular a partir de uma frase.
+    /// para o ±15 s (que grampeia o alvo no conhecido e chama aqui).
     ///
-    /// Só é possível ir até onde já existe áudio; pedir tempo além do que já
-    /// chegou deixa o player na última fatia disponível.
+    /// Só é possível ir até onde já existe áudio; pedir tempo além do medido
+    /// deixa o player no início do trecho ainda não medido — a PRIMEIRA
+    /// fatia sem duração —, sem pular nada. Com durações conhecidas os
+    /// inícios são estritos e o recuo abaixo nunca dispara.
     func seek(to globalTime: TimeInterval) {
         guard !queue.isEmpty, !chunkOffsets.isEmpty else { return }
         let target = min(max(0, globalTime), knownDuration)
@@ -204,6 +206,12 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         while low <= high {
             let mid = (low + high) / 2
             if chunkOffsets[mid] <= target { index = mid; low = mid + 1 } else { high = mid - 1 }
+        }
+        // Recuo à primeira fatia de mesmo início: sem duração medida os
+        // offsets se repetem, e parar na última repetida pularia o áudio das
+        // anteriores — a variante no trilho do clique que lia outra parte.
+        while index > 0, chunkOffsets[index - 1] == chunkOffsets[index] {
+            index -= 1
         }
         guard index < queue.count else { return }
         gotoChunk(index, within: target - chunkOffsets[index])

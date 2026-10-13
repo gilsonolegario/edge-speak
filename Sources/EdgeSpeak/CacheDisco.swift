@@ -14,8 +14,8 @@ enum CacheDisco {
 
     /// Chave estável para (texto, voz, cadência).
     ///
-    /// `v2` invalida o cache gravado antes do karaokê: aqueles segmentos não
-    /// têm `words`, e reaproveitá-los calaria o destaque por palavra para
+    /// `v3` (geração do repartidor; antes `v2` do karaokê): aqueles segmentos
+    /// não têm `words`, e reaproveitá-los calaria o destaque por palavra para
     /// sempre no mesmo documento.
     /// `lêNotas` entra na chave (áudio com e sem notas é diferente); com o
     /// default, a matéria-prima é idêntica à de antes — nenhum cache antigo

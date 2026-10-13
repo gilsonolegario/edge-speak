@@ -8,6 +8,9 @@ struct ContentView: View {
 
     @State private var text: String = ""
     @State private var pdfDocument: PDFDocument?
+    /// Identidade estável do documento aberto (URL do arquivo): ancora a
+    /// posição salva. Nil no modo só-texto (sem arquivo, sem retomada).
+    @State private var currentDocumentID: String?
     @State private var frases: [TextImport.Phrase] = []
     @State private var frasesFiltradas: [TextImport.Phrase] = []
     @AppStorage(AppSetting.integralKey) private var integralMode: Bool = AppSetting.integralDefault
@@ -80,6 +83,11 @@ struct ContentView: View {
                     pdfDocument = r.pdf
                     frases = r.frases
                     frasesFiltradas = r.frasesFiltradas
+                    // Ancora a posição salva no arquivo (vale para PDF e texto:
+                    // a identidade é a URL, não o tipo). Só aqui, no sucesso —
+                    // a parada acima salvou a posição do documento anterior.
+                    currentDocumentID = url.absoluteString
+                    speech.documentIDForPosition = url.absoluteString
                     speech.setStatusKey(
                         "status.fileLoaded",
                         args: [url.lastPathComponent, r.filtrado.count],
@@ -542,9 +550,28 @@ struct ContentView: View {
     private func togglePlay() {
         if canPause {
             controller.pause()
-        } else {
-            controller.play(phrases: playList(), voice: voice, rate: rate, lêNotas: lêNotas)
+            return
         }
+        // Retomada de pausa interna: o áudio já está onde parou — sem busca.
+        let retomavaPausa = controller.isPaused
+        controller.play(phrases: playList(), voice: voice, rate: rate, lêNotas: lêNotas)
+        guard !retomavaPausa else { return }
+        resumeSavedPositionIfCovered()
+    }
+
+    /// Retomada automática: reabrir e dar play volta onde parou, SÓ quando o
+    /// áudio medido já cobre o ponto — senão começa do zero. O status diz de
+    /// onde, reutilizando o formato de tempo da barra (sem duplicar lógica).
+    private func resumeSavedPositionIfCovered() {
+        guard let doc = currentDocumentID else { return }
+        let saved = ReadingPositionStore.load(documentID: doc, voice: voice)
+        guard ReadingPositionStore.shouldResume(saved: saved, knownDuration: controller.knownDuration),
+              let ponto = saved else { return }
+        controller.seek(to: ponto)
+        controller.setStatusKey(
+            "status.resumedFrom",
+            args: [PlayerBar.formatTime(ponto)],
+            locale: idioma)
     }
 
     /// Clique que toca: pula para a frase clicada; sem áudio nem síntese em

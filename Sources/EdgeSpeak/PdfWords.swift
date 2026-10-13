@@ -18,6 +18,20 @@ enum PdfWords {
             struct Word: Decodable {
                 let text: String
                 let box: [CGFloat]
+                /// Sobrescrito (bit do span ou pequeno+elevado, vide
+                /// Tools/pdf_extract.py). Ausente em JSON antigo: vira false.
+                let sup: Bool
+
+                enum CodingKeys: String, CodingKey {
+                    case text, box, sup
+                }
+
+                init(from decoder: Decoder) throws {
+                    let c = try decoder.container(keyedBy: CodingKeys.self)
+                    text = try c.decode(String.self, forKey: .text)
+                    box = try c.decode([CGFloat].self, forKey: .box)
+                    sup = try c.decodeIfPresent(Bool.self, forKey: .sup) ?? false
+                }
             }
         }
     }
@@ -40,7 +54,18 @@ enum PdfWords {
 
     /// Linhas por página: `[(texto, caixa em coords do PDFKit, palavras)]`,
     /// ou nil se o PyMuPDF não estiver disponível (o chamador usa o PDFKit).
+    /// A variante com `sup` (`linesWithSup`) é o caminho completo do sinal
+    /// geométrico; esta aqui descarta o `sup` para não quebrar o chamador
+    /// atual (o extrator adota o `sup` em passo próprio).
     static func lines(pdfURL: URL, pageCount: Int) -> [[(text: String, box: CGRect, words: [(text: String, box: CGRect)])]]? {
+        linesWithSup(pdfURL: pdfURL, pageCount: pageCount)?.map { page in
+            page.map { (text: $0.text, box: $0.box, words: $0.words.map { (text: $0.text, box: $0.box) }) }
+        }
+    }
+
+    /// Mesmo que `lines`, mas cada palavra leva o `sup` (sobrescrito) do
+    /// JSON — é por aqui que o sinal geométrico entra no app.
+    static func linesWithSup(pdfURL: URL, pageCount: Int) -> [[(text: String, box: CGRect, words: [(text: String, box: CGRect, sup: Bool)])]]? {
         guard let python = pythonWithFitz() else { return nil }
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("EdgeSpeak-words-\(UUID().uuidString).json")
@@ -70,7 +95,7 @@ enum PdfWords {
                     width: max(0, line.box[2] - line.box[0]),
                     height: max(0, line.box[3] - line.box[1]))
                 guard rect.width > 0, rect.height > 0 else { return nil }
-                let words: [(text: String, box: CGRect)] = (line.words ?? []).compactMap { word in
+                let words: [(text: String, box: CGRect, sup: Bool)] = (line.words ?? []).compactMap { word in
                     let text = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty, word.box.count == 4 else { return nil }
                     let rect = CGRect(
@@ -78,7 +103,7 @@ enum PdfWords {
                         width: max(0, word.box[2] - word.box[0]),
                         height: max(0, word.box[3] - word.box[1]))
                     guard rect.width > 0, rect.height > 0 else { return nil }
-                    return (text, rect)
+                    return (text, rect, word.sup)
                 }
                 return (line.text, rect, words)
             }

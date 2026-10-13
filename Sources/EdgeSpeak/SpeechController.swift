@@ -42,6 +42,10 @@ final class SpeechController: ObservableObject {
     private var currentKey: String?
     /// Voz da leitura atual (para exportar com a extensão certa e o crédito).
     @Published private(set) var voiceInUse: String = ""
+    /// Identidade do documento aberto (URL do arquivo), gravada pela UI.
+    /// É o que ancora a posição salva: pausar/parar guarda o `elapsed` sob
+    /// (documento+voz); terminar ou descartar a transcrição limpa.
+    var documentIDForPosition: String?
     /// Task da síntese em curso, para poder cancelar.
     private var synthTask: Task<Void, Never>?
     /// Geração da síntese: cada `play` novo incrementa; `cancelSynthesis`
@@ -112,6 +116,15 @@ final class SpeechController: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] index in
                 if self?.highlightWordIndex != index { self?.highlightWordIndex = index }
+            }
+            .store(in: &highlightCancellables)
+        // Fim da fila com síntese fechada: a leitura terminou — não há para
+        // onde retomar, então esquece a posição (reabrir começa do zero).
+        streamer.$isFinished
+            .receive(on: RunLoop.main)
+            .sink { [weak self] done in
+                guard let self, done else { return }
+                self.clearSavedPositionOnFinish()
             }
             .store(in: &highlightCancellables)
     }
@@ -460,6 +473,11 @@ final class SpeechController: ObservableObject {
         if isBusy { cancelSynthesis() }
         streamer.stop()
         PiperTTS.stopActiveSession()
+        // Lista nova, posição velha não vale: sem isto, o próximo play
+        // retomaria um ponto da leitura descartada.
+        if let doc = documentIDForPosition, !voiceInUse.isEmpty {
+            ReadingPositionStore.clear(documentID: doc, voice: voiceInUse)
+        }
         hasAudio = false
         audioURL = nil
         segments = []
@@ -571,6 +589,8 @@ final class SpeechController: ObservableObject {
         streamer.pause()
         isPlaying = false
         isPaused = true
+        // Relógio continua vivo na pausa: guarda de onde retomar.
+        savePositionNow()
         mostra("status.paused")
     }
 
@@ -584,13 +604,33 @@ final class SpeechController: ObservableObject {
 
     func stopPlayback() {
         pendingJumpIndex = nil
+        // O `stop` zera o relógio: captura antes, para a retomada saber de onde.
+        let pos = streamer.elapsed
+        let doc = documentIDForPosition
+        let voz = voiceInUse
         streamer.stop()
         // Com síntese em curso, a sessão segue (o cancelamento a encerra);
         // parada sem síntese não deixa processo sobrando.
         if !isBusy { PiperTTS.stopActiveSession() }
         isPlaying = false
         isPaused = false
+        if let doc, !voz.isEmpty {
+            ReadingPositionStore.save(documentID: doc, voice: voz, position: pos)
+        }
         mostra("status.stopped")
+    }
+
+    /// Guarda a posição atual sob (documento+voz), para a retomada.
+    /// Sem documento (modo só-texto) ou sem voz em uso, não há o que ancorar.
+    private func savePositionNow() {
+        guard let doc = documentIDForPosition, !voiceInUse.isEmpty else { return }
+        ReadingPositionStore.save(documentID: doc, voice: voiceInUse, position: streamer.elapsed)
+    }
+
+    /// Leitura concluída: esquece a posição (reabrir começa do zero).
+    private func clearSavedPositionOnFinish() {
+        guard let doc = documentIDForPosition, !voiceInUse.isEmpty else { return }
+        ReadingPositionStore.clear(documentID: doc, voice: voiceInUse)
     }
 
     /// Extrai "i/n" da mensagem de progresso para alimentar a barra.

@@ -4,7 +4,7 @@ Estado: 2026-10-13. Leitor de PDF/texto com leitura em voz alta em
 **fluxo**: cada fatia sintetizada toca assim que fica pronta. Dois
 motores: edge-tts online (vozes Microsoft neurais, devolve tempos
 por palavra) e Piper offline (um WAV por frase, sem tempos de
-palavra). Árvore verde: **88 testes em 10 suítes** (`swift test`),
+palavra). Árvore verde: **96 testes em 12 suítes** (`swift test`),
 build limpo.
 
 UI no desenho do IINA: **toolbar no topo** (Abrir, Voz, Opções) +
@@ -12,8 +12,8 @@ conteúdo + **barra de controle flutuante na base, sempre visível**.
 
 - Linguagem: Swift / SwiftUI, plataforma macOS 14+. Pacote SwiftPM
   (Swift 6, modo de linguagem v5), alvo `EdgeSpeak`, fontes em
-  `Sources/EdgeSpeak/` (21 arquivos), testes em
-  `Tests/EdgeSpeakTests/` (10 suítes, swift-testing: `@Test`/
+  `Sources/EdgeSpeak/` (20 arquivos), testes em
+  `Tests/EdgeSpeakTests/` (12 suítes, swift-testing: `@Test`/
   `#expect`, não XCTest).
 - **Decisão de arquitetura:** o motor permanece interno
   (`StreamingPlayer` + `EdgeTTS`/`PiperTTS`). `edge-playback`/mpv
@@ -31,7 +31,11 @@ conteúdo + **barra de controle flutuante na base, sempre visível**.
   selo de status por regra ([P]/[S]/[I]/[?]); o mapa de OSS e
   licenças está em `docs/pesquisas/oss-mapa.md` (MFA, SRE,
   pdfminer.six, AVAudioPlayerNode, EPUBKit… — o que adaptar, o que
-  evitar e por quê).
+  evitar e por quê); os achados da auditoria paralela de UI e
+  threading vivem em `docs/pesquisas/auditoria-20261013.md`
+  (palavra do painel em amarelo, Play que retoma com síntese em
+  voo, `store` fora da main, pulo pendente limpo no erro, arrasto
+  que não dispara salto — todos incorporados nas seções abaixo).
 
 ---
 
@@ -253,7 +257,8 @@ Regras e decisões:
   `seek(to:)` grampeava no fim do áudio medido ou caía na fatia
   errada: o clique lia OUTRA parte. `seek(toSegment:)` procura a
   fatia que contém a frase (por `seg.index`) e usa `seg.start`
-  (tempo LOCAL, sempre certo); o destaque usa os mesmos tempos
+  (tempo LOCAL, sempre certo); o reposicionamento dentro da fatia
+  passa pelo auxiliar privado `gotoChunk`; o destaque usa os mesmos tempos
   locais. O relógio exibido (`elapsed`) continua aproximado até as
   sondas chegarem — só ele. Devolve `false` quando a frase ainda
   não tem áudio.
@@ -403,6 +408,9 @@ struct Phrase: Hashable, Sendable {
   (`groupByLine`: sobreposição vertical acima da metade da menor
   altura; minX/minY/maxX/maxY por linha, ordenadas). Sem nenhum
   casamento, a frase herda as caixas do parágrafo (`seg.rects`).
+  Frase que cruza a virada de página é partida em um trecho por
+  página (cada trecho com sua página e caixas); sem virada, um
+  trecho só.
   `words` continua com as palavras do parágrafo — o karaokê casa por
   texto, não por índice.
 - `editorPhrases(_:integral:)`: texto digitado/colado, mesma UMA
@@ -633,8 +641,11 @@ static func store(key: String, audioURL: URL, segments: [EdgeTTS.Segment])
 static func remove(key: String)                  // apaga a entrada inteira
 ```
 
-- Chave: SHA-256 de `"v2|<voz>|<percent>|[sem-notas|]<texto>"`. O
-  prefixo `v2` invalida o cache anterior ao karaokê (aqueles
+- Chave: SHA-256 de `"v3|<voz>|<percent>|[sem-notas|]<texto>"`. O
+  prefixo `v3` é a geração do repartidor de frases: mesma matéria,
+  repartidor novo = índices novos — sem a geração na chave, um
+  cache antigo serviria segmentos com índices de outra numeração
+  (antes, `v2` invalidava o cache anterior ao karaokê, cujos
   segmentos não têm `words`). `lêNotas` entra na chave (áudio com e
   sem notas é diferente); com o default, a matéria-prima é idêntica
   à de antes — nenhum cache antigo é invalidado.
@@ -886,8 +897,10 @@ var onPageClick: ((Int, CGPoint) -> Void)?
 
 `SettingsView` — cena `Settings` (⌘,), abas **Leitura** (voz, ritmo,
 seguimento, idioma), **Texto** (tamanho da fonte, "Texto integral",
-"Ler notas de rodapé") e **Avançado** (vazia — pendência, seção
-Pendências). Todo controle grava via `@AppStorage` nas chaves de
+"Ler notas de rodapé") e **Avançado** (tamanho do cache em disco e
+botão "Limpar cache", via `CacheDisco.totalBytes()`/
+`clearAll(preserving:)` com aviso `.edgeSpeakClearCache`; a medida
+roda fora da main). Todo controle grava via `@AppStorage` nas chaves de
 `AppSetting` — as mesmas que o `ContentView` usa. Nota honesta: a
 cena de Ajustes não enxerga o controller da janela principal, então
 não há como desabilitar controles durante a síntese (a cadência vale
@@ -1004,10 +1017,11 @@ para a próxima síntese de todo modo).
 12. A raiz da janela é o `Container` de tipo fixo; `.toolbar` nunca
     é aplicado direto ao conteúdo que troca de forma (a barra some —
     defeito medido).
-13. A chave de cache é SHA-256 de `"v2|<voz>|<percent>|[sem-notas|]
+13. A chave de cache é SHA-256 de `"v3|<voz>|<percent>|[sem-notas|]
     <texto>"` com `\n` nas fronteiras de parágrafo do `fullText`.
     Trocar o prefixo ou a fórmula de junção invalida todo o cache de
-    uma vez — só se fez com o `v2`; depois, nunca sem motivo.
+    uma vez — só se fez no `v2` (karaokê) e no `v3` (geração do
+    repartidor de frases); depois, nunca sem motivo.
 14. `CacheDisco` falha em silêncio e nunca toca na chave corrente
     nem em entradas com <60 s; poda no máximo 1×/min em background.
 15. Piper: nunca deslocar offsets à mão nem inserir WAVs de silêncio
@@ -1040,9 +1054,10 @@ para a próxima síntese de todo modo).
 ## Testes (`Tests/EdgeSpeakTests/`) — o que cada suíte trava
 
 Suítes em swift-testing (`@Test`/`#expect`). `swift test` reporta
-**88 testes em 10 suítes** (conferido em 2026-10-13 por contagem de
-`@Test`; era 80/9 antes das fases de notas de rodapé, L10n e
-alinhamento):
+**96 testes em 12 suítes** (conferido em 2026-10-13 por contagem de
+`@Test func`; era 80/9 antes das fases de notas de rodapé, L10n e
+alinhamento, e 88/10 antes do lote de hifenização/virada,
+cache e auditoria de UI):
 
 - `ReadAloudFilterTests` (32) — `forSpeech` por símbolo e idioma
   (texto exato EN+PT: quantificadores, modais, turnos, conjuntos,
@@ -1091,6 +1106,13 @@ alinhamento):
 - `TranscriptionResetTests` (3) — modos integral/filtrado geram
   textos e chaves de cache diferentes, `CacheDisco.remove` apaga do
   cache, `discardTranscription` limpa o estado.
+- `TextImportTests` (7) — hifenização no casamento frase→caixas
+  (junto casa, no meio não junta, ligadura), frase na virada de
+  página parte em dois trechos (sem virada, um só) e reserva sem
+  caixa cai no segmento.
+- `CacheDiscoTests` (1) — `clearAll(preserving:)` apaga as demais
+  entradas preservando a chave em uso, `remove` apaga e
+  `totalBytes` responde.
 
 ---
 
@@ -1109,10 +1131,6 @@ alinhamento):
 
 ## Pendências (com o estado da prova)
 
-- **Aba "Avançado" dos Ajustes sem itens** ("Nenhuma opção avançada
-  disponível no momento"): o comentário no código cita limpeza de
-  cache, mas `CacheDisco.remove(key:)` já existe e é testada — falta
-  só o item de UI em `SettingsView.advancedTab`.
 - **Primeiros segundos de áudio sem destaque no PDF:** reprodutível
   (a fatia toca antes de o destaque assentar); **causa ainda não
   isolada** — não há hipótese confirmada. Aberta.
