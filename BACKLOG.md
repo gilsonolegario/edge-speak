@@ -25,6 +25,15 @@ Repo público com histórico desde `0aa5658`.
 - [CÓDIGO] Régua horizontal como zona de notas + várias notas por página
   (sem marcador e abaixo da régua: sem número, marcada, no lugar).
   Commit `e0c5cdc`.
+- [CÓDIGO] Régua perdida na decodificação + zona sintética por fonte:
+  PageLines sem CodingKeys esperava footnoteRuleY e o JSON emite
+  footnote_rule_y (a régua desenhada nunca chegava); bloco ≥2 linhas com
+  número e fonte ≤0,85×mediana; continuações vão ao marcador.
+  Commit `5dda99d`.
+- [MEDIDO] Neutrality: 12 notas ligadas, zero frase de nota no fluxo da
+  página; 2 falsos positivos contidos (marca d'água EBSCO, tabela de
+  cabeçalhos); suíte 115 testes/13 suítes. Os "0 corpos" antigos eram a
+  régua perdida, não ausência no arquivo.
 - [MEDIDO] No artigo de teste: 12 marcadores distintos (1–12), 12
   ocorrências — todos anunciados; 0 corpos no arquivo (só números).
 - [LIMITE] Corpos ausentes neste artigo (perícia: sem texto, anotação,
