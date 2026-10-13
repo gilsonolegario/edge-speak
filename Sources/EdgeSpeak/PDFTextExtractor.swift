@@ -44,7 +44,7 @@ enum PDFTextExtractor {
     }
 
     static func extract(_ document: PDFDocument) -> String {
-        extractSegments(document).map { $0.text }.joined(separator: "\n")
+        extractSegments(document).segmentos.map { $0.text }.joined(separator: "\n")
     }
 
     /// Parágrafos com página e caixas das linhas (0-based), para o destaque
@@ -53,17 +53,27 @@ enum PDFTextExtractor {
     /// A lógica de XY-cut, cabeçalho/rodapé, parágrafos e hífen é a mesma do
     /// `extract`: a página é a da primeira linha de cada parágrafo, e os
     /// rects são só os dessa página (o resto do cruzamento é ignorado).
-    static func extractSegments(_ document: PDFDocument) -> [(text: String, page: Int, rects: [CGRect], words: [(text: String, box: CGRect, page: Int, sup: Bool)])] {
+    /// Segmentos + régua de notas por página (topo em coords PDFKit, só nas
+    /// páginas com régua). A régua diz a zona de notas; sem ela, valem as
+    /// heurísticas de número+posição.
+    static func extractSegments(_ document: PDFDocument) -> (
+        segmentos: [(text: String, page: Int, rects: [CGRect], words: [(text: String, box: CGRect, page: Int, sup: Bool)])],
+        regras: [Int: CGFloat]
+    ) {
         let pages = (0..<document.pageCount).compactMap { document.page(at: $0) }
 
         var perPage: [[Line]] = []
+        var regras: [Int: CGFloat] = [:]
         // PyMuPDF primeiro (palavras com caixas: sem palavras coladas);
         // PDFKit como reserva (sem Python ou sem PyMuPDF).
         if let url = document.documentURL,
-           let ext = PdfWords.linesWithSup(pdfURL: url, pageCount: document.pageCount),
+           let ext = PdfWords.linesRules(pdfURL: url, pageCount: document.pageCount),
            ext.count == pages.count {
-            perPage = ext.enumerated().map { (i, lines) in
-                lines.compactMap { lineFromExternal(text: $0.text, box: $0.box, words: $0.words.map { (text: $0.text, box: $0.box, page: i, sup: $0.sup) }, pageIndex: i) }
+            perPage = ext.enumerated().map { (i, page) in
+                page.lines.compactMap { lineFromExternal(text: $0.text, box: $0.box, words: $0.words.map { (text: $0.text, box: $0.box, page: i, sup: $0.sup) }, pageIndex: i) }
+            }
+            for (i, page) in ext.enumerated() {
+                if let ry = page.ruleY { regras[i] = ry }
             }
         } else {
             for (index, page) in pages.enumerated() {
@@ -91,7 +101,7 @@ enum PDFTextExtractor {
             ordered.append(contentsOf: readingOrder(kept, leading: leading))
         }
 
-        return paragraphs(from: ordered, leading: leading)
+        return (paragraphs(from: ordered, leading: leading), regras)
     }
 
     // MARK: - Linhas

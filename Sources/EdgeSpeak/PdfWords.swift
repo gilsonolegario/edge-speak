@@ -10,6 +10,9 @@ import Foundation
 enum PdfWords {
     struct PageLines: Decodable {
         let index: Int
+        /// Topo da régua de notas em coords PDFKit (nil sem régua ou JSON
+        /// antigo — a ausência não quebra a decodificação).
+        let footnoteRuleY: CGFloat?
         let lines: [Line]
         struct Line: Decodable {
             let text: String
@@ -66,6 +69,27 @@ enum PdfWords {
     /// Mesmo que `lines`, mas cada palavra leva o `sup` (sobrescrito) do
     /// JSON — é por aqui que o sinal geométrico entra no app.
     static func linesWithSup(pdfURL: URL, pageCount: Int) -> [[(text: String, box: CGRect, words: [(text: String, box: CGRect, sup: Bool)])]]? {
+        guard let pages = decodedPages(pdfURL: pdfURL, pageCount: pageCount) else { return nil }
+        return pages.map { page in page.lines.compactMap(lineTuples) }
+    }
+
+    /// Mesma extração com a régua de notas por página (nil sem régua ou em
+    /// JSON antigo). É por aqui que o sinal "zona de notas" entra no app.
+    static func linesRules(pdfURL: URL, pageCount: Int) -> [(lines: [(text: String, box: CGRect, words: [(text: String, box: CGRect, sup: Bool)])], ruleY: CGFloat?)]? {
+        guard let pages = decodedPages(pdfURL: pdfURL, pageCount: pageCount) else { return nil }
+        typealias Linha = (text: String, box: CGRect, words: [(text: String, box: CGRect, sup: Bool)])
+        return pages.map { page -> (lines: [Linha], ruleY: CGFloat?) in
+            var ls: [Linha] = []
+            ls.reserveCapacity(page.lines.count)
+            for line in page.lines {
+                if let t = lineTuples(line) { ls.append(t) }
+            }
+            return (lines: ls, ruleY: page.footnoteRuleY)
+        }
+    }
+
+    /// Roda o script e decodifica as páginas em ordem. Nil sem Python/erro.
+    private static func decodedPages(pdfURL: URL, pageCount: Int) -> [PageLines]? {
         guard let python = pythonWithFitz() else { return nil }
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("EdgeSpeak-words-\(UUID().uuidString).json")
@@ -87,27 +111,28 @@ enum PdfWords {
               let data = try? Data(contentsOf: out),
               let parsed = try? JSONDecoder().decode(Output.self, from: data)
         else { return nil }
-        return parsed.pages.sorted { $0.index < $1.index }.map { page in
-            page.lines.compactMap { line in
-                guard line.box.count == 4 else { return nil }
-                let rect = CGRect(
-                    x: line.box[0], y: line.box[1],
-                    width: max(0, line.box[2] - line.box[0]),
-                    height: max(0, line.box[3] - line.box[1]))
-                guard rect.width > 0, rect.height > 0 else { return nil }
-                let words: [(text: String, box: CGRect, sup: Bool)] = (line.words ?? []).compactMap { word in
-                    let text = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty, word.box.count == 4 else { return nil }
-                    let rect = CGRect(
-                        x: word.box[0], y: word.box[1],
-                        width: max(0, word.box[2] - word.box[0]),
-                        height: max(0, word.box[3] - word.box[1]))
-                    guard rect.width > 0, rect.height > 0 else { return nil }
-                    return (text, rect, word.sup)
-                }
-                return (line.text, rect, words)
-            }
+        return parsed.pages.sorted { $0.index < $1.index }
+    }
+
+    /// Linha decodificada em tupla, ou nil sem geometria válida.
+    private static func lineTuples(_ line: PageLines.Line) -> (text: String, box: CGRect, words: [(text: String, box: CGRect, sup: Bool)])? {
+        guard line.box.count == 4 else { return nil }
+        let rect = CGRect(
+            x: line.box[0], y: line.box[1],
+            width: max(0, line.box[2] - line.box[0]),
+            height: max(0, line.box[3] - line.box[1]))
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        let words: [(text: String, box: CGRect, sup: Bool)] = (line.words ?? []).compactMap { word in
+            let text = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, word.box.count == 4 else { return nil }
+            let rect = CGRect(
+                x: word.box[0], y: word.box[1],
+                width: max(0, word.box[2] - word.box[0]),
+                height: max(0, word.box[3] - word.box[1]))
+            guard rect.width > 0, rect.height > 0 else { return nil }
+            return (text, rect, word.sup)
         }
+        return (line.text, rect, words)
     }
 
     /// Primeiro interpretador que importa `fitz` (não instala nada sozinho).
