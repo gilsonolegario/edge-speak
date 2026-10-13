@@ -26,10 +26,10 @@ conteúdo + **barra de controle flutuante na base, sempre visível**.
   test` e reabertura do app.
 - Contexto de pesquisa (citado, não copiado): as regras de
   verbalização de fórmulas seguem o levantamento em
-  `/tmp/opencode/logica-leitura.md` (forallx Calgary, SEP,
+  `docs/pesquisas/logica-leitura.md` (forallx Calgary, SEP,
   MathSpeak/ClearSpeak/SRE, manuais PT-BR — UFS/UFR/UFSC), com
   selo de status por regra ([P]/[S]/[I]/[?]); o mapa de OSS e
-  licenças está em `/tmp/opencode/oss-mapa.md` (MFA, SRE,
+  licenças está em `docs/pesquisas/oss-mapa.md` (MFA, SRE,
   pdfminer.six, AVAudioPlayerNode, EPUBKit… — o que adaptar, o que
   evitar e por quê).
 
@@ -320,10 +320,14 @@ Regras e decisões:
   sinaliza a `CancelFlag` (instância por geração: a tarefa velha
   continua lendo `isCancelled == true` dentro do `run` bloqueante)
   e encerra os processos dos dois motores.
-- **No-ops de `play`:** retoma pausa com a mesma chave; pausa com
-  síntese da mesma leitura em voo (`synthKeyInFlight`) retoma o que
-  há; play repetido da mesma leitura em voo não inicia segunda
-  síntese; síntese em curso com OUTRO texto cancela antes.
+- **`play`, nesta ordem:** retoma pausa com a mesma chave
+  (`status.playing`); pausa com a síntese da mesma leitura em voo
+  (`synthKeyInFlight`) retoma o streamer e o resto engata ao
+  chegar — `status.playingWhileSynthesizing` ou
+  `status.generatingNext` (antes caía no no-op e o Play parecia
+  morto; achado da auditoria); play repetido da mesma leitura em
+  voo não inicia segunda síntese; síntese em curso com OUTRO texto
+  cancela antes.
 - **`pendingJumpIndex` (clique antes do áudio):** `jumpToSegment`
   sem áudio guarda o índice como pendente em vez de ignorar; cada
   fatia que chega tenta o pulo (`retryPendingJump`), então o clique
@@ -499,7 +503,7 @@ motor). Contrato travado por teste (`falaNaoAlteraExibicao`):
   (anuncia o marcador colado, a menos que `lêNotas == false`) →
   colapso de espaços/vírgulas duplicadas.
 - **Decisões de verbalização (baseadas no levantamento em
-  `/tmp/opencode/logica-leitura.md`):**
+  `docs/pesquisas/logica-leitura.md`):**
   - Quantificadores com variável e vírgula prosódica ("para todo
     x,"), modais □ ◇, turnos ⊢ ⊨ com pausa curta antes/depois,
     negações ⊬ ⊭, ASCII `|-` `|=` `->` `=>` `<->`.
@@ -755,7 +759,10 @@ PlayerBar  ← flutuante, sempre visível
   Karaokê palavra a palavra no painel: casamento por texto com cursor
   sequencial (o texto falado expande anos/abreviaturas — índice
   direto caía na palavra errada); palavra achada leva negrito +
-  fundo de acento forte + texto branco.
+  fundo amarelo (α 0,75) + texto escuro — o amarelo do PDF, não o
+  azul do sistema: unifica o karaokê nas duas vistas (divergência
+  apontada pela auditoria; o escuro sobre amarelo lê bem nos dois
+  temas).
 - **Cache do texto atribuído por (frase, palavra):** a vista é
   reavaliada a cada tique do progresso; reconstruir 45k letras do
   zero em cada um saturava a main. Fora da leitura calcula direto;
@@ -866,6 +873,13 @@ var onPageClick: ((Int, CGPoint) -> Void)?
   interna o painel tem altura limitada (140…300 pt).
 - `pointSize` é `CGFloat` (não `Font`): `Font` é invólucro opaco e
   o `NSTextView` precisa do valor em ponto.
+- **Só o clique, não o arrasto (`ClickReportingTextView`):** o
+  `mouseDown` guarda o ponto da janela e o caractere (conversão
+  janela→view, independente da rolagem); o `mouseUp` só reporta
+  com deslocamento <4 pt (`hypot`) — sem a guarda, arrastar para
+  selecionar disparava o salto no ponto da pressão (achado da
+  auditoria; o PDF já filtrava o mesmo limiar no
+  `ClickablePDFView`).
 - **Teleprompter:** `scrollTo` (UTF-16, como o TextKit conta) rola
   até a frase lida quando ela muda — não a cada palavra, para não
   tremer; com `follow` desligado, não toca na rolagem do usuário.
@@ -1116,7 +1130,7 @@ alinhamento):
   LaTeX, imagem); sem PDF de fórmulas medido, os testes cobrem a
   função pura.
 - Caminhos de melhoria pesquisados, sem integração (ver
-  `/tmp/opencode/oss-mapa.md`): Montreal Forced Aligner (MIT) para
+  `docs/pesquisas/oss-mapa.md`): Montreal Forced Aligner (MIT) para
   karaokê offline com Piper; AVAudioPlayerNode (nativo) para
   concatenação gapless sem sonda de duração; pdfminer.six (MIT) como
   plano B se o AGPL do PyMuPDF for bloqueador ao abrir o app.
