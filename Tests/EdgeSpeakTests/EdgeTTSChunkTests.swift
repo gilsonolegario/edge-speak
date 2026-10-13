@@ -50,4 +50,24 @@ struct EdgeTTSChunkTests {
         #expect(args.contains("/b.mp3"))
         #expect(args.joined(separator: " ").contains("silenceremove=stop_periods=-1"))
     }
+
+    /// JSON de tempos ilegível: áudio segue (segmentos vazios), mas o aviso
+    /// volta — nunca sincronia zerada em silêncio.
+    @Test func temposIlegiveisAvisamEmVezDeZerar() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chunk-\(UUID().uuidString).json")
+        try Data("{não é json".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let (segments, motivo) = EdgeTTS.loadSegments(url)
+        #expect(segments.isEmpty)
+        #expect(motivo?.isEmpty == false)
+    }
+
+    /// O aviso de sincronia não casa o "i/n" da barra de progresso: ele não
+    /// é progresso, e a barra não pode inventar um andamento.
+    @Test func avisoSemTemposNaoMenteABarra() {
+        let aviso = EdgeTTS.avisoSemTempos(
+            fatia: 3, motivo: "tempos ilegíveis em chunk-0003.json")
+        #expect(SpeechController.parseProgress(aviso) == nil)
+    }
 }

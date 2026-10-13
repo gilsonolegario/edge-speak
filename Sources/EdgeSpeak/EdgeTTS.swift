@@ -468,7 +468,13 @@ struct Rate: Equatable, Hashable, Sendable {
                                 }
                                 self.trimTrailingSilence(outURL)
                                 progress("Sintetizando \(done.increment())/\(total)…")
-                                let script = try self.loadSegments(jsonURL)
+                                let (script, motivo) = self.loadSegments(jsonURL)
+                                if let motivo {
+                                    // Aviso no status: sem tempos a fatia toca,
+                                    // mas destaque e salto por clique colapsam.
+                                    progress(Self.avisoSemTempos(
+                                        fatia: i + 1, motivo: motivo))
+                                }
                                 return (i, outURL, self.mapSegments(script, groupPhrases))
                             } catch {
                                 lastError = self.tail(error.localizedDescription, max: 300)
@@ -623,15 +629,32 @@ struct Rate: Equatable, Hashable, Sendable {
     }
 
     /// Lê os tempos de frase gravados pelo synth_timing.py.
-    private static func loadSegments(_ jsonURL: URL) throws -> [Segment] {
-        guard let data = try? Data(contentsOf: jsonURL),
-              let parsed = try? JSONDecoder().decode(Timings.self, from: data)
-        else {
-            // Sem tempos não há highlight, mas o áudio continua válido:
-            // degrada em silêncio em vez de falhar a síntese.
-            return []
+    ///
+    /// JSON ilegível não falha a síntese — o áudio continua válido —, mas
+    /// também não pode passar em silêncio: sem tempos o destaque e o salto
+    /// por clique da fatia colapsam (`mapSegments` põe tudo em 0). O aviso
+    /// volta para o chamador exibir no status; nunca se inventa tempo.
+    /// Interna (não privada) para a suíte cobrir a degradação.
+    static func loadSegments(
+        _ jsonURL: URL
+    ) -> (segments: [Segment], aviso: String?) {
+        guard let data = try? Data(contentsOf: jsonURL) else {
+            return ([], "\(jsonURL.lastPathComponent) não abriu")
         }
-        return parsed.segments
+        guard let parsed = try? JSONDecoder().decode(Timings.self, from: data)
+        else {
+            return ([], "tempos ilegíveis em \(jsonURL.lastPathComponent)")
+        }
+        return (parsed.segments, nil)
+    }
+
+    /// Mensagem de sincronia indisponível exibida no status (pura, p/ teste).
+    ///
+    /// Sem "i/n" no texto: a UI parseia `\d+/\d+` para alimentar a barra de
+    /// progresso, e este aviso não é progresso — casaria e a barra mentiria.
+    static func avisoSemTempos(fatia: Int, motivo: String) -> String {
+        "⚠ Sincronia indisponível na fatia \(fatia): \(motivo). "
+            + "O áudio segue normal, sem destaque por frase."
     }
 
     private struct Timings: Decodable {
