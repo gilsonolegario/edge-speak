@@ -66,7 +66,9 @@ enum TextImport {
                     userInfo: [NSLocalizedDescriptionKey: "Não foi possível abrir o PDF."]
                 )
             }
-            var segments = PDFTextExtractor.extractSegments(doc)
+            let extraidos = PDFTextExtractor.extractSegments(doc)
+            var segments = extraidos.segmentos
+            let regras = extraidos.regras
             if segments.isEmpty {
                 // Sem camada de geometria: cai para o texto bruto por página.
                 var parts: [String] = []
@@ -91,8 +93,8 @@ enum TextImport {
             // ligados aos marcadores, rótulos soltos descartados) antes de
             // repartir em frases de leitura. É aqui que moram as próximas
             // separações (fórmulas densas, legendas) sem tocar no leitor.
-            let frases = resolveFootnotes(makePhrases(from: segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page, sup: $0.sup) }) }))
-            let frasesFiltradas = resolveFootnotes(makePhrases(from: filtered(segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page, sup: $0.sup) }) }, isPDF: true)))
+            let frases = resolveFootnotes(makePhrases(from: segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page, sup: $0.sup) }) }), regras: regras)
+            let frasesFiltradas = resolveFootnotes(makePhrases(from: filtered(segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page, sup: $0.sup) }) }, isPDF: true)), regras: regras)
             return (
                 filtrado: join(frasesFiltradas), integral: join(frases), pdf: doc,
                 frases: frases, frasesFiltradas: frasesFiltradas
@@ -214,16 +216,37 @@ enum TextImport {
 /// rawdict do rodapé, últimas páginas só com bibliografia).
 /// Os índices das frases que ficam NÃO mudam (são propriedade, não posição)
 /// — destaque e salto por índice continuam valendo.
-    static func resolveFootnotes(_ phrases: [Phrase]) -> [Phrase] {
+    /// - `regras`: topo da régua por página (coords PDFKit). Com régua, só
+    ///   é zona de notas o que está ABAIXO dela: número solto acima é
+    ///   conteúdo e fica; corpo acima da régua nem é candidato. Sem régua,
+    ///   valem as heurísticas antigas. Default vazio (testes, via sem Python).
+    static func resolveFootnotes(_ phrases: [Phrase], regras: [Int: CGFloat] = [:]) -> [Phrase] {
+        /// Topo da frase (maior y em coords PDFKit); nil sem geometria.
+        func topo(_ ph: Phrase) -> CGFloat? { ph.rects.map(\.maxY).max() }
+        /// Na zona de notas: abaixo da régua da página (ou sem como saber).
+        func zona(_ ph: Phrase) -> Bool {
+            guard let pg = ph.page, let ry = regras[pg] else { return true }
+            guard let t = topo(ph) else { return true }
+            return t < ry
+        }
         var lista = phrases.filter { ph in
             guard ph.page != nil else { return true }
             let t = ph.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !(t.count <= 2 && Int(t) != nil)
+            guard t.count <= 2, Int(t) != nil else { return true }
+            // Número solto: com régua, só some abaixo dela (acima pode ser
+            // conteúdo); sem régua, some como antes (rótulo sem corpo).
+            if let pg = ph.page, regras[pg] != nil {
+                return !zona(ph)
+            }
+            return false
         }
         struct Corpo { var numero: Int; var texto: String; var frase: Phrase }
         var corpos: [Corpo] = []
         for ph in lista {
             guard ph.page != nil, ph.notaNumero == nil else { continue }
+            // Com régua na página, corpo só abaixo dela (data no texto
+            // corrido nunca vira corpo, mesmo com número na frente).
+            if let pg = ph.page, regras[pg] != nil, !zona(ph) { continue }
             let t = ph.text.drop(while: { $0.isWhitespace })
             let digitos = String(t.prefix(while: { $0.isNumber }))
             guard (1...2).contains(digitos.count), let n = Int(digitos) else { continue }
@@ -244,7 +267,23 @@ enum TextImport {
             guard let idxMarcador = indiceMarcador(
                 numero: corpo.numero, pagina: corpo.frase.page,
                 atePos: posAtual, aposPos: limite, em: lista,
-                excluindoIdx: corpo.frase.index) else { continue }
+                excluindoIdx: corpo.frase.index)
+            else {
+                // Sem marcador, mas abaixo da régua: é corpo sem âncora (há
+                // várias notas por página) — tira o número e marca, sem
+                // mover. A numeração em sequência confirma: número solto
+                // abaixo da régua é nota, não texto corrido.
+                if let pg = corpo.frase.page, let ry = regras[pg],
+                   let t = corpo.frase.rects.map(\.maxY).max(), t < ry {
+                    lista[posAtual] = Phrase(
+                        index: corpo.frase.index, text: corpo.texto,
+                        page: corpo.frase.page, rects: corpo.frase.rects,
+                        words: corpo.frase.words,
+                        paragraphEnd: corpo.frase.paragraphEnd,
+                        notaNumero: corpo.numero)
+                }
+                continue
+            }
             guard let posM = lista.firstIndex(where: { $0.index == idxMarcador })
             else { continue }
             let movida = Phrase(

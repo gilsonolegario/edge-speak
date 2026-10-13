@@ -74,6 +74,17 @@ def main() -> int:
     pages = []
     for index, page in enumerate(doc):
         h = page.rect.height
+        W = page.rect.width
+        # Régua de nota: desenho horizontal fino, largura 1/10–1/2 da página,
+        # na metade inferior (pesquisa §4: régua curta acima das notas).
+        # Sai em coords PDFKit (topo da régua); None sem régua. O Swift usa
+        # para decidir o que está ABAIXO dela (zona de notas).
+        regra_y = None
+        for r in page.get_drawings():
+            x0, y0, x1, y1 = r["rect"]
+            if abs(y1 - y0) < 3 and W * 0.1 < (x1 - x0) < W * 0.5 and y0 > h * 0.5:
+                regra_y = h - y0
+                break
         try:
             flags = fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES
             dd = page.get_text("dict", flags=flags)
@@ -210,7 +221,7 @@ def main() -> int:
                 ],
                 "words": itens,
             })
-        pages.append({"index": index, "lines": lines})
+        pages.append({"index": index, "footnote_rule_y": regra_y, "lines": lines})
 
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump({"pages": pages}, fh, ensure_ascii=False)

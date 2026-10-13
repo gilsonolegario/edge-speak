@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 
 @testable import EdgeSpeak
@@ -15,6 +16,84 @@ struct FootnoteTests {
 
     private func frase(_ i: Int, _ texto: String, pagina: Int?) -> TextImport.Phrase {
         TextImport.Phrase(index: i, text: texto, page: pagina, rects: [])
+    }
+
+    /// Frase com geometria (topo em coords PDFKit, origem embaixo), para os
+    /// testes de régua: o que está acima dela é texto corrido.
+    private func fraseCaixa(_ i: Int, _ texto: String, pagina: Int?, topo: CGFloat) -> TextImport.Phrase {
+        TextImport.Phrase(
+            index: i, text: texto, page: pagina,
+            rects: [CGRect(x: 100, y: topo - 10, width: 300, height: 10)])
+    }
+
+    /// Com régua, data acima dela fica intacta mesmo com marcador por perto;
+    /// só o corpo abaixo liga.
+    @Test func reguaSeparaDataDeCorpo() {
+        let regras: [Int: CGFloat] = [0: 100]
+        let lista = [
+            fraseCaixa(0, "tese aqui.12", pagina: 0, topo: 500),
+            fraseCaixa(1, "12 de outubro de 2026 registra o fato aqui", pagina: 0, topo: 400),
+            fraseCaixa(2, "12 Corpo longo da nota aqui", pagina: 0, topo: 50),
+        ]
+        let fora = TextImport.resolveFootnotes(lista, regras: regras)
+        #expect(fora.map(\.index) == [0, 2, 1])
+        #expect(fora[1].notaNumero == 12)
+        #expect(fora[2].text == "12 de outubro de 2026 registra o fato aqui")
+        #expect(fora[2].notaNumero == nil)
+    }
+
+    /// Com régua, número solto acima dela é conteúdo e fica; abaixo, some.
+    @Test func reguaNumeroSolto() {
+        let regras: [Int: CGFloat] = [0: 100]
+        let acima = TextImport.resolveFootnotes(
+            [fraseCaixa(0, "7", pagina: 0, topo: 500)], regras: regras)
+        #expect(acima.count == 1)
+        let abaixo = TextImport.resolveFootnotes(
+            [fraseCaixa(0, "7", pagina: 0, topo: 50)], regras: regras)
+        #expect(abaixo.isEmpty)
+    }
+
+    /// Sem régua (JSON antigo, via sem Python), vale a heurística de sempre.
+    @Test func semReguaHeuristica() {
+        let lista = [
+            frase(0, "tese aqui.5", pagina: 0),
+            frase(1, "5 Corpo longo da nota aqui", pagina: 0),
+        ]
+        let fora = TextImport.resolveFootnotes(lista)
+        #expect(fora.map(\.index) == [0, 1])
+        #expect(fora[1].notaNumero == 5)
+    }
+
+    /// Várias notas sob a mesma régua: a ligada move, a sem marcador fica
+    /// sem número e marcada (não é lida como texto corrido).
+    @Test func variasNotasSobRegua() {
+        let regras: [Int: CGFloat] = [0: 100]
+        let lista = [
+            fraseCaixa(0, "tese aqui.7", pagina: 0, topo: 500),
+            fraseCaixa(1, "7 Corpo longo da sete aqui", pagina: 0, topo: 60),
+            fraseCaixa(2, "8 Outro corpo longo aqui", pagina: 0, topo: 40),
+        ]
+        let fora = TextImport.resolveFootnotes(lista, regras: regras)
+        #expect(fora.map(\.index) == [0, 1, 2])
+        #expect(fora[1].notaNumero == 7)
+        #expect(fora[2].text == "Outro corpo longo aqui")
+        #expect(fora[2].notaNumero == 8)
+    }
+
+    /// Número solto abaixo da régua continua descartado mesmo em sequência
+    /// (é rótulo sem corpo, não nota posterior legível).
+    @Test func sequenciaNumeroSoltoAbaixoDaRegua() {
+        let regras: [Int: CGFloat] = [0: 100]
+        let lista = [
+            fraseCaixa(0, "tese aqui.7", pagina: 0, topo: 500),
+            fraseCaixa(1, "7 Corpo longo da sete aqui", pagina: 0, topo: 60),
+            fraseCaixa(2, "8", pagina: 0, topo: 40),
+        ]
+        let fora = TextImport.resolveFootnotes(lista, regras: regras)
+        // O "8" solto abaixo da régua continua descartado (rótulo sem corpo),
+        // mas a sequência 7→8 fica registrada na ligação da 7.
+        #expect(fora.map(\.index) == [0, 1])
+        #expect(fora[1].notaNumero == 7)
     }
 
     private func fraseSup(_ i: Int, _ texto: String, pagina: Int?, palavras: [(String, Bool)]) -> TextImport.Phrase {
