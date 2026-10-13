@@ -1,0 +1,62 @@
+# BACKLOG — pedidos do dono, com estado da prova
+
+Legenda: [NO AR] está no app aberto e é testável agora · [CÓDIGO] implementado
+e verde, esperando rebuild+relaunch · [OBRA] agente trabalhando · [ABERTO]
+não implementado · [SUGESTÃO] proposta da assessoria, não pedida.
+
+Sessão de 2026-10-13. Build no ar: pacote `build-app-10` (pid 46492).
+Repo público com histórico desde `0aa5658`.
+
+## Funcionalidade (pedidos)
+
+- [NO AR] Clique toca a partir da frase clicada, mesmo sem play antes, e o
+  PDF acompanha na hora (com seguimento desligado).
+- [NO AR] Salto lê o ponto clicado (seek direto à fatia; sem grampear no
+  áudio medido nem cair em fatia errada).
+- [NO AR] Amarelo em palavra repetida com contexto ±3 (reproduzido p. 5).
+- [NO AR] Fórmulas por extenso no idioma da voz, com pausas (⊢/⊨/∴/tal que)
+  e ASCII (~, |-, /=, ^, / prosaico, ∼ inicial).
+- [NO AR] Marcador de nota anunciado ("nota de rodapé 7"); número solto sem
+  corpo em silêncio.
+- [CÓDIGO] Corpo de nota lido direto após o anúncio + opção "Ler notas de
+  rodapé" (default ligado; desligado vira pausa). Commit `5a4f6a5`.
+- [CÓDIGO] Cache v3 (geração do repartidor na chave). Commit `750a02a`.
+- [NO AR] Barra com PDF aberto; tradução PT/EN com seletor; voz persistida;
+  Ajustes em 3 abas; descarte de transcrição.
+- [NO AR] Play retoma com síntese em curso; cache fora da main; pulo morre
+  no erro; amarelo unificado painel/PDF; toggle sem PDF; arrasto não pula.
+- [ABERTO] 15 s iniciais sem destaque (causa não isolada).
+- [ABERTO] Hífen de fim de linha + virada de página no destaque (pesquisa
+  pronta em `docs/pesquisas/pymupdf-pesquisa.md`; implementação pendente).
+- [ABERTO] Marcador geométrico (bit de sobrescrito) e corpos onde existirem.
+- [ABERTO] Aba Avançado vazia (preencher com limpeza de cache ou remover).
+- [ABERTO] Trilho honesto no streaming (ainda grampeia no áudio medido).
+
+## Limites honestos (não são bugs)
+
+- O artigo de teste não tem corpo de nota na camada de texto (só números
+  1–15): leitura de corpo só é demonstrável noutro PDF.
+- Símbolo que chega como imagem não é lido; voz online depende do endpoint.
+
+## Documentação e mapa (pedidos)
+
+- [OBRA] Documentação completa (README/INTERFACE) — agente com rate limit,
+  retomar; lista de ajustes editoriais com o principal.
+- [PRONTO] Mapa funcionalidade→código (`docs/pesquisas/mapa-funcionalidades.md`).
+- [PRONTO] Auditorias (`docs/pesquisas/auditoria-20261013.md`,
+  `avaliacao-paralela.md`) e mapa OSS (`docs/pesquisas/oss-mapa.md`).
+- [OBRA] Pesquisa PyMuPDF todos-os-tipos (agente em fundo).
+
+## Infra (pedidos)
+
+- [NO AR] Repo privado→público com GPL-3.0; `build-app.sh` aborta com app
+  aberto (rebuild por cima corrompia o bundle — medido).
+- [ABERTO] Próximo rebuild+relaunch (leva cache v3 + BACKLOG): precisa
+  fechar o app (⌘Q).
+
+## Sugestões da assessoria (NÃO pedidas — decidir)
+
+- Retomar onde parou por documento; dicionário de pronúncia; modo ditado;
+  exportação com tempos; fila de documentos; temporizador; sumário como
+  capítulos; estatísticas; log diagnóstico para o amigo; IDs estáveis entre
+  modos integral/filtrado.
