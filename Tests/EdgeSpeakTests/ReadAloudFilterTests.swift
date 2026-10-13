@@ -27,9 +27,9 @@ struct ReadAloudFilterTests {
             ("∃!x", "there exists exactly one x, such that,", "existe exatamente um x, tal que,"),
             ("∀x", "for all x,", "para todo x,"),
             ("εx", "epsilon x,", "épsilon x,"),
-            ("p ⊨ q", "p entails q", "p acarreta q"),
-            ("p |= q", "p entails q", "p acarreta q"),
-            ("p ⊢ q", "p proves q", "p prova q"),
+            ("p ⊨ q", "p, entails, q", "p, acarreta, q"),
+            ("p |= q", "p, entails, q", "p, acarreta, q"),
+            ("p ⊢ q", "p, proves, q", "p, prova, q"),
             ("p <-> q", "p, if and only if, q", "p, se e somente se, q"),
             ("p ⇔ q", "p, if and only if, q", "p, se e somente se, q"),
             ("p ↔ q", "p, if and only if, q", "p, se e somente se, q"),
@@ -98,10 +98,11 @@ struct ReadAloudFilterTests {
     }
 
     @Test func consequencia() {
-        #expect(fala("∴ p", voz: en) == "therefore p")
-        #expect(fala("∴ p", voz: pt) == "portanto p")
-        #expect(fala("∵ p", voz: en) == "because p")
-        #expect(fala("∵ p", voz: pt) == "porque p")
+        // ∴/∵ pedem pausa antes: a conclusão respira depois da pausa.
+        #expect(fala("∴ p", voz: en) == ", therefore p")
+        #expect(fala("∴ p", voz: pt) == ", portanto p")
+        #expect(fala("∵ p", voz: en) == ", because p")
+        #expect(fala("∵ p", voz: pt) == ", porque p")
     }
 
     @Test func algebra() {
@@ -185,8 +186,8 @@ struct ReadAloudFilterTests {
     }
 
     @Test func iotaDeDescricaoDefinida() {
-        #expect(fala("℩x φ(x)", voz: en) == "the x such that phi (x)")
-        #expect(fala("℩x φ(x)", voz: pt) == "o x tal que fi (x)")
+        #expect(fala("℩x φ(x)", voz: en) == "the x, such that phi (x)")
+        #expect(fala("℩x φ(x)", voz: pt) == "o x, tal que fi (x)")
     }
 
     @Test func cantosDeQuine() {
@@ -201,10 +202,10 @@ struct ReadAloudFilterTests {
     }
 
     @Test func construtorDeConjuntos() {
-        #expect(fala("{x | φ(x)}", voz: en) == "the set of x such that phi (x)")
-        #expect(fala("{x | φ(x)}", voz: pt) == "o conjunto de x tal que fi (x)")
-        #expect(fala("{x : φ(x)}", voz: en) == "the set of x such that phi (x)")
-        #expect(fala("{x : φ(x)}", voz: pt) == "o conjunto de x tal que fi (x)")
+        #expect(fala("{x | φ(x)}", voz: en) == "the set of x, such that, phi (x)")
+        #expect(fala("{x | φ(x)}", voz: pt) == "o conjunto de x, tal que, fi (x)")
+        #expect(fala("{x : φ(x)}", voz: en) == "the set of x, such that, phi (x)")
+        #expect(fala("{x : φ(x)}", voz: pt) == "o conjunto de x, tal que, fi (x)")
         // Sem marcador de "tal que" a chave é agrupamento: silêncio, e não
         // "o conjunto de" (era o que estragava o subscrito "R_{x}").
         #expect(fala("{a, b}", voz: en) == "a, b")
@@ -230,10 +231,10 @@ struct ReadAloudFilterTests {
 
     @Test func negacoesDoTurno() {
         // Γ é grego: sai pelo nome antes da regra do turno.
-        #expect(fala("Γ ⊬ B", voz: en) == "gamma does not prove B")
-        #expect(fala("Γ ⊬ B", voz: pt) == "gama não prova B")
-        #expect(fala("Γ ⊭ B", voz: en) == "gamma does not entail B")
-        #expect(fala("Γ ⊭ B", voz: pt) == "gama não acarreta B")
+        #expect(fala("Γ ⊬ B", voz: en) == "gamma, does not prove, B")
+        #expect(fala("Γ ⊬ B", voz: pt) == "gama, não prova, B")
+        #expect(fala("Γ ⊭ B", voz: en) == "gamma, does not entail, B")
+        #expect(fala("Γ ⊭ B", voz: pt) == "gama, não acarreta, B")
     }
 
     /// Trechos reais do artigo de teste (Neutrality v80) com o que o leitor
@@ -244,10 +245,48 @@ struct ReadAloudFilterTests {
         #expect(fala("Brace & World.", voz: en) == "Brace and World.")
         #expect(
             fala("B(A) |= H(A) ↔RHB.", voz: en)
-                == "B of A entails H of A, if and only if, R H B.")
+                == "B of A, entails, H of A, if and only if, R H B.")
         #expect(
             fala("B(A) |= H(A) ↔RHB.", voz: pt)
-                == "B de A acarreta H de A, se e somente se, R H B.")
+                == "B de A, acarreta, H de A, se e somente se, R H B.")
+    }
+
+    /// ASCII que faltava: ~ (negação), |- (turno), /= (diferente).
+    @Test func asciiLogico() {
+        #expect(fala("~p", voz: en) == "not p")
+        #expect(fala("~p", voz: pt) == "não p")
+        #expect(fala("p |- q", voz: en) == "p, proves, q")
+        #expect(fala("p |- q", voz: pt) == "p, prova, q")
+        #expect(fala("a/=b", voz: en) == "a is not equal to b")
+        #expect(fala("a/=b", voz: pt) == "a é diferente de b")
+    }
+
+    /// "∼" no começo é negação; entre termos continua semelhança.
+    @Test func tilOuSemelhanca() {
+        #expect(fala("∼p", voz: en) == "not p")
+        #expect(fala("∼p", voz: pt) == "não p")
+        #expect(fala("(∼p)", voz: en) == "(not p)")
+        #expect(fala("a ∼ b", voz: en) == "a is similar to b")
+        #expect(fala("a ∼ b", voz: pt) == "a é semelhante a b")
+    }
+
+    /// "/" entre letras em prosa vira "ou"; "and/or" fica intacto.
+    @Test func barraDeProsa() {
+        #expect(fala("analytic/synthetic", voz: en) == "analytic or synthetic")
+        #expect(fala("analytic/synthetic", voz: pt) == "analytic ou synthetic")
+        #expect(fala("and/or", voz: en) == "and/or")
+    }
+
+    /// "^" entre letras/dígitos é sobrescrito: silêncio, sem "circumflex".
+    @Test func chapeuDeSobrescrito() {
+        #expect(fala("x^2", voz: en) == "x 2")
+        #expect(fala("x^2", voz: pt) == "x 2")
+    }
+
+    /// O ponto do λ vira pausa: "λx.M" = "lambda x, M".
+    @Test func pontoDoLambda() {
+        #expect(fala("λx.M", voz: en) == "lambda x, M")
+        #expect(fala("λx.M", voz: pt) == "lambda x, M")
     }
 
     // MARK: - Fórmulas inteiras
@@ -274,7 +313,7 @@ struct ReadAloudFilterTests {
                 "a is less than or equal to b is not equal to c",
                 "a é menor ou igual a b é diferente de c"
             ),
-            ("∴ p", "therefore p", "portanto p"),
+            ("∴ p", ", therefore p", ", portanto p"),
             ("λx", "lambda x", "lambda x"),
             ("⟨a, b⟩ ∈ R", ", a, b, in R", ", a, b, pertence a R"),
         ]

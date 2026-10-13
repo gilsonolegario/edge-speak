@@ -206,19 +206,28 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             if chunkOffsets[mid] <= target { index = mid; low = mid + 1 } else { high = mid - 1 }
         }
         guard index < queue.count else { return }
-        let within = target - chunkOffsets[index]
+        gotoChunk(index, within: target - chunkOffsets[index])
+    }
+
+    /// Toca a fatia `chunk` a partir de `within` (tempo local). É o final
+    /// comum do `seek(to:)` (tempo global, para a barra) e do
+    /// `seek(toSegment:)` (frase, para o clique): os dois usam a mesma
+    /// máquina de estados.
+    private func gotoChunk(_ chunk: Int, within: TimeInterval) {
+        guard chunk < queue.count else { return }
         // `isFinished` conta como "tocar": arrastar para trás depois que o
         // áudio acabou deve voltar a reproduzir, e não ficar parado.
         let wasPlaying = isPlaying || isPaused || isFinished
 
-        if index != nextIndex {
+        if chunk != nextIndex {
             current?.stop()
             current = nil
-            nextIndex = index
-            playChunk(queue[index])
+            nextIndex = chunk
+            playChunk(queue[chunk])
         }
         current?.currentTime = min(within, current?.duration ?? within)
-        elapsed = chunkOffsets[index] + (current?.currentTime ?? within)
+        elapsed = (chunk < chunkOffsets.count ? chunkOffsets[chunk] : knownDuration)
+            + (current?.currentTime ?? within)
         isFinished = false
         if wasPlaying, current != nil {
             current?.play()
@@ -232,27 +241,28 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         updateHighlight(at: current?.currentTime ?? 0)
     }
 
-    /// Instante global do início da frase de índice global `index`, ou nil
-    /// quando essa frase ainda não chegou (síntese em curso).
-    func timeForSegment(index: Int) -> TimeInterval? {
-        for (chunk, segs) in chunkSegments.enumerated() {
-            guard chunk < chunkOffsets.count else { continue }
-            for seg in segs where seg.index == index {
-                return chunkOffsets[chunk] + seg.start
-            }
-        }
-        return nil
-    }
-
-    /// Salta para o início da frase de índice global `index`.
+    /// Salta para o início da frase de índice global `index`, indo DIRETO à
+    /// fatia que a contém — sem passar por tempo global.
     ///
-    /// Funciona DURANTE o streaming: os índices são globais desde a primeira
-    /// fatia. Devolve false quando a frase ainda não tem áudio.
+    /// Por que direto: no streaming as durações chegam atrasadas (sonda em
+    /// fundo) e `knownDuration`/offsets ficam errados até medirem. O caminho
+    /// antigo convertia frase→tempo global com offsets zerados e o `seek(to:)`
+    /// grampeava no fim do áudio medido ou caía na fatia errada: o clique lia
+    /// OUTRA parte. Aqui a fatia é a que contém a frase e o ponto é
+    /// `seg.start` (tempo LOCAL, sempre certo); o destaque usa os mesmos
+    /// tempos locais. O relógio exibido (`elapsed`) continua aproximado até
+    /// as sondas chegarem — só ele. Devolve false quando a frase ainda não
+    /// tem áudio.
     @discardableResult
     func seek(toSegment index: Int) -> Bool {
-        guard let t = timeForSegment(index: index) else { return false }
-        seek(to: t)
-        return true
+        for (chunk, segs) in chunkSegments.enumerated() {
+            guard chunk < queue.count else { continue }
+            if let seg = segs.first(where: { $0.index == index }) {
+                gotoChunk(chunk, within: seg.start)
+                return true
+            }
+        }
+        return false
     }
 
     /// Clique no texto: pula para a frase e garante reprodução.

@@ -260,7 +260,8 @@ enum ReadAloudFilter {
         guard text.contains("{"), let re = try? NSRegularExpression(pattern: #"\{([^{}]*)\}"#)
         else { return text }
         let abertura = pt ? "o conjunto de " : "the set of "
-        let talQue = pt ? "tal que" : "such that"
+        // Pausa dos dois lados: "o conjunto de x, tal que, …".
+        let talQue = pt ? ", tal que, " : ", such that, "
         var out = text
         // De trás para frente: as trocas no fim não mudam os offsets do início.
         for m in re.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
@@ -288,7 +289,7 @@ enum ReadAloudFilter {
             (#"∃\s*([A-Za-z])"#, "there exists $1, such that,", "existe $1, tal que,"),
             (#"∃"#, "there exists", "existe"),
             // Iota (℩x φ, descrição definida de Russell/PM): lê como o x tal que.
-            (#"℩\s*([A-Za-z])"#, "the $1 such that", "o $1 tal que"),
+            (#"℩\s*([A-Za-z])"#, "the $1, such that", "o $1, tal que"),
             (#"℩"#, " such that ", " tal que "),
             (#"∀\s*([A-Za-z])"#, "for all $1,", "para todo $1,"),
             (#"∀"#, "for all", "para todo"),
@@ -300,12 +301,15 @@ enum ReadAloudFilter {
             // "possivelmente" estragaria prosa comum.
             (#"□"#, " necessarily ", " necessariamente "),
             (#"◇"#, " possibly ", " possivelmente "),
-            (#"⊨"#, " entails ", " acarreta "),
-            (#"\|="#, " entails ", " acarreta "),
-            (#"⊢"#, " proves ", " prova "),
+            // ⊢/⊨ pedem pausa curta antes e depois (a voz precisa respirar entre as
+            // premissas e a conclusão).
+            (#"⊨"#, ", entails, ", ", acarreta, "),
+            (#"\|="#, ", entails, ", ", acarreta, "),
+            (#"⊢"#, ", proves, ", ", prova, "),
+            (#"\|-"#, ", proves, ", ", prova, "),
             // Negações do turno: ⊬ "não prova", ⊭ "não acarreta".
-            (#"⊬"#, " does not prove ", " não prova "),
-            (#"⊭"#, " does not entail ", " não acarreta "),
+            (#"⊬"#, ", does not prove, ", ", não prova, "),
+            (#"⊭"#, ", does not entail, ", ", não acarreta, "),
             (#"<->"#, ", if and only if, ", ", se e somente se, "),
             (#"⇔"#, ", if and only if, ", ", se e somente se, "),
             (#"↔"#, ", if and only if, ", ", se e somente se, "),
@@ -334,8 +338,9 @@ enum ReadAloudFilter {
             // Produto: só o × próprio. O "x" ASCII (como em "3 x 4") fica
             // intacto de propósito — é letra comum em prosa.
             (#"×"#, " times ", " vezes "),
-            (#"∴"#, " therefore ", " portanto "),
-            (#"∵"#, " because ", " porque "),
+            // ∴/∵ pedem pausa antes (início de conclusão/justificativa).
+            (#"∴"#, ", therefore ", ", portanto "),
+            (#"∵"#, ", because ", ", porque "),
             (#"∉"#, " is not in ", " não pertence a "),
             (#"∈"#, " in ", " pertence a "),
             (#"⊆"#, " is a subset of ", " é subconjunto de "),
@@ -349,6 +354,10 @@ enum ReadAloudFilter {
             (#"≈"#, " is approximately equal to ", " é aproximadamente igual a "),
             (#"≃"#, " is asymptotically equal to ", " é assintoticamente igual a "),
             (#"∥"#, " is parallel to ", " é paralelo a "),
+            // "∼" no começo (ou depois de abre-parêntese/vírgula) é negação
+            // ("∼p" = "não p"); entre termos continua semelhança. Sem esta
+            // regra o "∼p" saía "is similar to p", que está errado.
+            (#"(^|[^A-Za-z0-9\)\]\s]\s*)∼\s*"#, "$1not ", "$1não "),
             (#"∼"#, " is similar to ", " é semelhante a "),
             // ⊥/⊤: em PT, "falso"/"verdadeiro" (aula brasileira); EN mantém
             // bottom/top, também aceitos na literatura em inglês.
@@ -376,6 +385,17 @@ enum ReadAloudFilter {
             (#">="#, " is greater than or equal to ", " é maior ou igual a "),
             (#"!="#, " is not equal to ", " é diferente de "),
             (#"<>"#, " is not equal to ", " é diferente de "),
+            (#"/="#, " is not equal to ", " é diferente de "),
+            // "~" é a negação ASCII (forallx lista ~ como variante de ¬).
+            (#"~"#, " not ", " não "),
+            // "/" entre letras em prosa ("analytic/synthetic") lê "ou"; com
+            // guarda para não morder "and/or" (a guarda vem DEPOIS da letra,
+            // porque o lookbehind avalia antes de consumi-la). Fração
+            // (dígitos) fica fora.
+            (#"([A-Za-z])(?<!\band)(?<!\bou)\s*/\s*([A-Za-z])"#, "$1 or $2", "$1 ou $2"),
+            // "^" entre letras/dígitos é sobrescrito: silêncio (nunca
+            // "circumflex"), o número continua e a voz segue.
+            (#"(?<=[A-Za-z0-9])\^(?=[A-Za-z0-9])"#, " ", " "),
             (#"(?<![=!<>])=(?![=])"#, " equals ", " é igual a "),
             (#"≠"#, " is not equal to ", " é diferente de "),
             (#"≤"#, " is less than or equal to ", " é menor ou igual a "),
@@ -383,6 +403,8 @@ enum ReadAloudFilter {
             // Gregas pelo nome, nos dois idiomas (EN "alpha", PT "alfa").
             // Maiúsculas incluídas: o NFKC não funde grego com latim, então
             // "Α" (U+0391) nunca casa palavra comum escrita com "A".
+            // O ponto do λ vira pausa, nunca "dot": "λx.M" = "lambda x, M".
+            (#"λ\s*([A-Za-z])\s*\."#, "lambda $1, ", "lambda $1, "),
             (#"λ"#, " lambda ", " lambda "),
             (#"Λ"#, " lambda ", " lambda "),
             (#"α"#, " alpha ", " alfa "),
