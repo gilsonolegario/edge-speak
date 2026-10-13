@@ -217,7 +217,6 @@ def main() -> int:
             chaves = sorted(grupos, key=lambda k: ordem_de.get(k, 10**9))
         else:
             chaves = sorted(grupos)
-        import statistics as _st
 
         def _caixa(ps):
             bs = [p["box"] for p in ps]
@@ -232,7 +231,7 @@ def main() -> int:
             c = _caixa(ps)
             if c[3] > c[1]:
                 alturas.append(c[3] - c[1])
-        mediana_alt = _st.median(alturas) if alturas else 12.0
+        mediana_alt = statistics.median(alturas) if alturas else 12.0
         for pos, chave in enumerate(chaves):
             partes = sorted(grupos[chave], key=lambda p: p["x0"])
             if not partes:

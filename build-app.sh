@@ -15,6 +15,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+fail() { echo "build-app: $*" >&2; exit 1; }
+
 # Nunca remontar o bundle com o app em execução: o `rm -rf` + `cp -a` por
 # cima dos arquivos abertos (pythonbase, scripts) corrompe a cópia com
 # "Operation not permitted" no meio e deixa um bundle incompleto no disco
@@ -25,8 +27,6 @@ fi
 
 STAGE="$ROOT/Build/staging"
 APP="$ROOT/EdgeSpeak.app"
-
-fail() { echo "build-app: $*" >&2; exit 1; }
 
 # Há ao menos um wheel casando o padrão?
 tem() { compgen -G "$1" > /dev/null; }

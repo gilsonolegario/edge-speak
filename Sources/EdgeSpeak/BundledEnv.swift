@@ -224,6 +224,14 @@ enum BundledEnv {
         }
         if proc.isRunning {
             proc.terminate()
+            // Dá um instante para o SIGTERM; se o filho ignorar, força.
+            let hard = Date().addingTimeInterval(2)
+            while proc.isRunning && Date() < hard {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if proc.isRunning {
+                kill(proc.processIdentifier, SIGKILL)
+            }
             proc.waitUntilExit()
             return (1, "tempo esgotado após \(Int(timeout))s")
         }
