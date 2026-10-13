@@ -13,6 +13,18 @@ enum TextImport {
         struct WordBox: Hashable, Sendable {
             let text: String
             let rect: CGRect
+            /// Página da caixa (nil quando desconhecida/teste). Permite
+            /// partir a frase na virada de página em vez de desenhar
+            /// caixas de duas páginas na primeira.
+            let page: Int?
+
+            /// `init` explícito (não memberwise): neste toolchain, membro
+            /// com default não entra no inicializador sintetizado.
+            init(text: String, rect: CGRect, page: Int? = nil) {
+                self.text = text
+                self.rect = rect
+                self.page = page
+            }
         }
         let index: Int
         let text: String
@@ -74,8 +86,8 @@ enum TextImport {
             // ligados aos marcadores, rótulos soltos descartados) antes de
             // repartir em frases de leitura. É aqui que moram as próximas
             // separações (fórmulas densas, legendas) sem tocar no leitor.
-            let frases = resolveFootnotes(makePhrases(from: segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box) }) }))
-            let frasesFiltradas = resolveFootnotes(makePhrases(from: filtered(segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box) }) }, isPDF: true)))
+            let frases = resolveFootnotes(makePhrases(from: segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page) }) }))
+            let frasesFiltradas = resolveFootnotes(makePhrases(from: filtered(segments.map { ($0.text, $0.page as Int?, $0.rects, $0.words.map { Phrase.WordBox(text: $0.text, rect: $0.box, page: $0.page) }) }, isPDF: true)))
             return (
                 filtrado: join(frasesFiltradas), integral: join(frases), pdf: doc,
                 frases: frases, frasesFiltradas: frasesFiltradas
@@ -135,7 +147,8 @@ enum TextImport {
     /// sem nenhuma caixa casada, herda as caixas do parágrafo. `words`
     /// continua sendo as palavras do parágrafo (o karaokê casa por texto).
     /// A última frase de cada bloco marca o fim do parágrafo.
-    private static func makePhrases(from segments: [(text: String, page: Int?, rects: [CGRect], words: [Phrase.WordBox])]) -> [Phrase] {
+    /// Interna para teste (TextImportTests monta segmentos sintéticos).
+    static func makePhrases(from segments: [(text: String, page: Int?, rects: [CGRect], words: [Phrase.WordBox])]) -> [Phrase] {
         var out: [Phrase] = []
         for seg in segments {
             var cursor = 0
@@ -145,11 +158,28 @@ enum TextImport {
                 guard !t.isEmpty else { continue }
                 let sentences = splitSentences(t)
                 for (i, sentence) in sentences.enumerated() {
-                    let boxes = boxesForSentence(sentence, words: seg.words, cursor: &cursor)
-                    out.append(Phrase(
-                        index: out.count, text: sentence, page: seg.page,
-                        rects: boxes.isEmpty ? seg.rects : boxes, words: seg.words,
-                        paragraphEnd: i == sentences.count - 1))
+                    let casados = boxesForSentence(sentence, words: seg.words, cursor: &cursor)
+                    let trechos = trechosPorPagina(
+                        sentence: sentence, casados: casados, paginaPadrao: seg.page)
+                    if trechos.isEmpty {
+                        out.append(Phrase(
+                            index: out.count, text: sentence, page: seg.page,
+                            rects: seg.rects, words: seg.words,
+                            paragraphEnd: i == sentences.count - 1))
+                        continue
+                    }
+                    // Uma frase, uma página: cada trecho leva só as caixas
+                    // e palavras da sua página; só o último herda o fim.
+                    for (k, trecho) in trechos.enumerated() {
+                        let ultimo = k == trechos.count - 1
+                        let pagina = trecho.pagina ?? seg.page
+                        out.append(Phrase(
+                            index: out.count, text: trecho.texto,
+                            page: pagina,
+                            rects: trecho.caixas.isEmpty ? seg.rects : trecho.caixas,
+                            words: seg.words.filter { $0.page == nil || $0.page == pagina },
+                            paragraphEnd: ultimo && i == sentences.count - 1))
+                    }
                 }
             }
         }
@@ -238,32 +268,125 @@ enum TextImport {
     }
 
     /// Minúsculas, só letras e dígitos: mesma normalização do karaokê.
-    private static func normalizedWord(_ s: String) -> String {
-        s.lowercased().filter { $0.isLetter || $0.isNumber }
+    /// NFKC antes: ligadura "ﬁ" vira "fi" (pesquisa §6 — sem isto, o token
+    /// nunca casa com a caixa).
+    static func normalizedWord(_ s: String) -> String {
+        s.precomposedStringWithCompatibilityMapping.lowercased()
+            .filter { $0.isLetter || $0.isNumber }
     }
 
-    /// Caixas das palavras da frase, em ordem, agrupadas por linha. Cada
-    /// token é buscado a partir do cursor; o não achado é pulado sem
-    /// deslocar o cursor.
-    private static func boxesForSentence(
+    /// Casa os tokens da frase com as caixas, em ordem. Devolve, por token
+    /// casado, a posição do token, a caixa e a página. Interna para teste.
+    ///
+    /// Cada token é buscado a partir do cursor; o não achado é pulado sem
+    /// deslocar o cursor. Hífen de fim de linha tem duas tentativas extras,
+    /// ambas sem consumir em falha:
+    /// - texto cru ("procu-", "rar") contra caixa junta ("procurar"):
+    ///   token sem o "-" mais o próximo colados;
+    /// - texto junto ("procurar", ex. JSON antigo) contra caixas partidas:
+    ///   token contra as 2 caixas seguintes coladas (hífens fora), com a
+    ///   união como caixa.
+    /// Sem isto, a frase hifenizada caía nas caixas do parágrafo inteiro.
+    static func boxesForSentence(
         _ sentence: String, words: [Phrase.WordBox], cursor: inout Int
-    ) -> [CGRect] {
-        var boxes: [CGRect] = []
+    ) -> [(token: Int, box: CGRect, page: Int?)] {
+        var casados: [(token: Int, box: CGRect, page: Int?)] = []
         let tokens = sentence.components(separatedBy: .whitespacesAndNewlines)
-        for token in tokens {
-            let needle = normalizedWord(token)
-            guard !needle.isEmpty else { continue }
+            .filter { !$0.isEmpty }
+        var t = 0
+        while t < tokens.count {
+            let needle = normalizedWord(tokens[t])
+            guard !needle.isEmpty else { t += 1; continue }
             var found: Int?
             for j in cursor..<words.count
             where normalizedWord(words[j].text) == needle {
                 found = j
                 break
             }
-            guard let j = found else { continue }
-            boxes.append(words[j].rect)
-            cursor = j + 1
+            if let j = found {
+                casados.append((token: t, box: words[j].rect, page: words[j].page))
+                cursor = j + 1
+                t += 1
+                continue
+            }
+            // Texto cru contra caixa junta.
+            if tokens[t].hasSuffix("-"), t + 1 < tokens.count {
+                let junto = normalizedWord(String(tokens[t].dropLast()))
+                    + normalizedWord(tokens[t + 1])
+                if !junto.isEmpty {
+                    var achou = false
+                    for j in cursor..<words.count
+                    where normalizedWord(words[j].text) == junto {
+                        casados.append((token: t, box: words[j].rect, page: words[j].page))
+                        cursor = j + 1
+                        t += 2
+                        achou = true
+                        break
+                    }
+                    if achou { continue }
+                }
+            }
+            // Texto junto contra caixas partidas (2 seguintes).
+            if cursor + 1 < words.count {
+                let duas = normalizedWord(words[cursor].text)
+                    + normalizedWord(words[cursor + 1].text)
+                if !duas.isEmpty, duas == needle {
+                    let uniao = words[cursor].rect.union(words[cursor + 1].rect)
+                    casados.append((
+                        token: t, box: uniao,
+                        page: words[cursor].page ?? words[cursor + 1].page))
+                    cursor += 2
+                    t += 1
+                    continue
+                }
+            }
+            t += 1
         }
-        return groupByLine(boxes)
+        return casados
+    }
+
+    /// Parte a frase na virada de página: devolve (texto, página, caixas)
+    /// por trecho, na ordem. Sem virada, um trecho só. Interna para teste.
+    ///
+    /// Por que partir (pesquisa §5): o texto se junta para narrar, mas a
+    /// caixa nunca atravessa páginas — antes, a frase levava as caixas da
+    /// primeira página e o destaque saía na página errada.
+    static func trechosPorPagina(
+        sentence: String,
+        casados: [(token: Int, box: CGRect, page: Int?)],
+        paginaPadrao: Int?
+    ) -> [(texto: String, pagina: Int?, caixas: [CGRect])] {
+        let tokens = sentence.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return [] }
+        // Página por token: a da caixa casada; sem caixa, herda a anterior.
+        var paginaPorToken = [Int?](repeating: nil, count: tokens.count)
+        var atual = paginaPadrao
+        var c = 0
+        for t in 0..<tokens.count {
+            while c < casados.count, casados[c].token < t { c += 1 }
+            if c < casados.count, casados[c].token == t, let pg = casados[c].page {
+                atual = pg
+            }
+            paginaPorToken[t] = atual
+        }
+        // Agrupa consecutivos de mesma página.
+        var trechos: [(texto: String, pagina: Int?, caixas: [CGRect])] = []
+        var ini = 0
+        for t in 1...tokens.count {
+            if t == tokens.count || paginaPorToken[t] != paginaPorToken[ini] {
+                let faixa = Array(tokens[ini..<t])
+                let caixas = casados
+                    .filter { $0.token >= ini && $0.token < t }
+                    .map(\.box)
+                trechos.append((
+                    texto: faixa.joined(separator: " "),
+                    pagina: paginaPorToken[ini],
+                    caixas: groupByLine(caixas)))
+                ini = t
+            }
+        }
+        return trechos
     }
 
     /// Agrupa caixas por linha (sobreposição vertical acima da metade da

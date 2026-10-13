@@ -39,7 +39,8 @@ final class WordAligner {
 
     /// Reduz a palavra ao que compara: minúsculas, só letras e dígitos.
     static func normalizada(_ s: String) -> String {
-        s.lowercased().filter { $0.isLetter || $0.isNumber }
+        s.precomposedStringWithCompatibilityMapping.lowercased()
+            .filter { $0.isLetter || $0.isNumber }
     }
 
     /// Índice da caixa do PDF que corresponde a cada palavra falada; `nil`
