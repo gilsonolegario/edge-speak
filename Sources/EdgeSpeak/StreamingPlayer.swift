@@ -267,6 +267,7 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// state machine.
     private func gotoChunk(_ chunk: Int, within: TimeInterval) {
         guard chunk < queue.count else { return }
+        Self.navLog("goto chunk=\(chunk) within=\(String(format: "%.2f", within)) next=\(nextIndex) hasCurrent=\(current != nil)")
         // `isFinished` counts as "play": dragging backwards after the
         // audio ended must resume playing, not stay still.
         // `isStarved` too: an emptied queue with synthesis in progress is a wait,
@@ -324,6 +325,7 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @discardableResult
     func jumpToSegment(_ index: Int) -> Bool {
         guard seek(toSegment: index) else { return false }
+        Self.navLog("jump idx=\(index) chunk=\(nextIndex)")
         play()
         return true
     }
@@ -422,6 +424,7 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func playChunk(_ url: URL) {
+        Self.navLog("playChunk idx=\(nextIndex)")
         guard nextIndex < queue.count else {
             handleExhausted()
             return
@@ -491,6 +494,20 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var nudgeSince = 0.0
     private var nudgeSeg = -1
     private var nudgedNow = false
+    /// TEMP diagnostic: navigation trace (jump/seek/play-chunk) into the lag
+    /// log. Removed after the repeat investigation.
+    static func navLog(_ s: String) {
+        let line = String(format: "%.3f NAV %@\n", Date().timeIntervalSince1970, s)
+        guard let data = line.data(using: .utf8) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edgespeak-lag.log")
+        if FileManager.default.fileExists(atPath: url.path),
+           let h = try? FileHandle(forWritingTo: url) {
+            try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
     /// TEMP diagnostic: 1 Hz + on-change trace of audio time vs shown
     /// segment/word. Removed after the lag investigation.
     private var lagProbeCount = 0
