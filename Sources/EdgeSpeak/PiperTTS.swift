@@ -541,6 +541,9 @@ enum PiperTTS {
             .appendingPathComponent("EdgeSpeak-\(UUID().uuidString)", isDirectory: true)
         let wavsDir = dir.appendingPathComponent("wavs", isDirectory: true)
         try fm.createDirectory(at: wavsDir, withIntermediateDirectories: true)
+        // Registra antes de purgar: sem isso a síntese online seguinte
+        // apagaria estes WAVs ainda referenciados pela leitura (M4).
+        EdgeTTS.keepOfflineDirectory(dir)
         EdgeTTS.purgeStaleDirectories(keeping: dir)
         progress("Carregando a voz offline (só desta vez por leitura)…")
 
@@ -599,25 +602,66 @@ enum PiperTTS {
 
     // MARK: - WAV: duração e concatenação
 
-    /// Duração lida do cabeçalho do WAV.
+    /// Duração lida do cabeçalho do WAV, sem presumir 44 bytes fixos.
+    ///
+    /// Varre os chunks do RIFF até o `data`: um chunk extra (LIST/fact)
+    /// deslocaria o áudio e a conta antiga `(tamanho − 44)` contaminava a
+    /// duração e o offset das frases seguintes (B3). Sem `data` legível,
+    /// devolve nil e o chamador cai na duração declarada.
+    /// Interna (não privada) para a suíte cobrir o chunk extra.
     static func duration(of url: URL) -> Double? {
         guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
-        guard let head = try? h.read(upToCount: 64), head.count >= 44 else { return nil }
+        guard let head = try? h.read(upToCount: 8192), head.count >= 44,
+              let som = wavLayout(head),
+              let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int
+        else { return nil }
+        // O campo pode mentir para mais (arquivo truncado): vale o que há em disco.
+        let pcm = min(som.dadosTamanho, size - som.dadosOffset)
+        guard pcm > 0 else { return nil }
+        return Double(pcm) / (som.taxa * som.bytesPorAmostra)
+    }
+
+    /// Localiza o PCM dentro do RIFF: taxa, bytes por amostra, início e
+    /// tamanho do chunk `data`. Pura (testável sem arquivo).
+    /// Interna (não privada) para a suíte e a junção manual usarem.
+    static func wavLayout(_ head: Data) -> (
+        taxa: Double, bytesPorAmostra: Double, dadosOffset: Int, dadosTamanho: Int
+    )? {
         func u32(_ o: Int) -> UInt32 {
-            head[o...o + 3].reversed().reduce(0) { ($0 << 8) | UInt32($1) }
+            UInt32(head[o]) | (UInt32(head[o + 1]) << 8)
+                | (UInt32(head[o + 2]) << 16) | (UInt32(head[o + 3]) << 24)
         }
         func u16(_ o: Int) -> UInt16 {
             UInt16(head[o]) | (UInt16(head[o + 1]) << 8)
         }
-        let taxa = Double(u32(24))
-        let canais = Double(u16(22))
-        let bits = Double(u16(34))
-        guard taxa > 0, canais > 0, bits > 0,
-              let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int
+        guard head.count >= 44,
+              head[0] == 0x52, head[1] == 0x49, head[2] == 0x46, head[3] == 0x46, // "RIFF"
+              head[8] == 0x57, head[9] == 0x41, head[10] == 0x56, head[11] == 0x45 // "WAVE"
         else { return nil }
-        let bytesPorAmostra = canais * bits / 8.0
-        return Double(size - 44) / (taxa * bytesPorAmostra)
+        var taxa = 0.0
+        var bytesPorAmostra = 0.0
+        var i = 12
+        while i + 8 <= head.count {
+            let tamanho = Int(u32(i + 4))
+            let éFmt = head[i] == 0x66 && head[i + 1] == 0x6D && head[i + 2] == 0x74 && head[i + 3] == 0x20
+            let éDados = head[i] == 0x64 && head[i + 1] == 0x61 && head[i + 2] == 0x74 && head[i + 3] == 0x61
+            if éFmt {
+                guard tamanho >= 16, i + 24 <= head.count else { return nil }
+                let canais = Double(u16(i + 10))
+                let amostra = Double(u32(i + 12))
+                let bits = Double(u16(i + 22))
+                guard amostra > 0, canais > 0, bits > 0 else { return nil }
+                taxa = amostra
+                bytesPorAmostra = canais * bits / 8.0
+            } else if éDados {
+                guard taxa > 0, bytesPorAmostra > 0 else { return nil }
+                return (taxa, bytesPorAmostra, i + 8, tamanho)
+            }
+            // Chunk de tamanho ímpar tem 1 byte de enchimento.
+            i += 8 + tamanho + (tamanho & 1)
+        }
+        return nil
     }
 
     /// Junta os WAVs num único arquivo (ffmpeg quando houver, senão na mão:
@@ -640,14 +684,22 @@ enum PiperTTS {
             }
             return outURL
         }
-        // Na mão: cabeçalho do primeiro + PCM de todos (mesmo formato).
+        // Na mão: cabeçalho do primeiro (até o `data`, com eventuais chunks
+        // extras) + PCM de todos (mesmo formato). Os tamanhos no RIFF e no
+        // `data` são recalculados para o deslocamento real (ver B3).
         var pcm = Data()
         var cabecalho: Data?
+        var offDados = 0
         for url in ordered {
             let dados = try Data(contentsOf: url)
-            guard dados.count > 44 else { throw makeError("WAV inválido na junção.") }
-            if cabecalho == nil { cabecalho = dados.prefix(44) }
-            pcm.append(dados.suffix(from: 44))
+            guard let som = wavLayout(dados), dados.count > som.dadosOffset else {
+                throw makeError("WAV inválido na junção.")
+            }
+            if cabecalho == nil {
+                cabecalho = dados.prefix(som.dadosOffset)
+                offDados = som.dadosOffset
+            }
+            pcm.append(dados.suffix(from: som.dadosOffset))
         }
         guard var head = cabecalho else { throw makeError("A junção não gerou áudio.") }
         func escreveU32(_ v: UInt32, em o: Int) {
@@ -656,8 +708,8 @@ enum PiperTTS {
             head[o + 2] = UInt8((v >> 16) & 0xFF)
             head[o + 3] = UInt8((v >> 24) & 0xFF)
         }
-        escreveU32(UInt32(pcm.count + 36), em: 4)
-        escreveU32(UInt32(pcm.count), em: 40)
+        escreveU32(UInt32(pcm.count + head.count - 8), em: 4)
+        escreveU32(UInt32(pcm.count), em: offDados - 4)
         try? FileManager.default.removeItem(at: outURL)
         var final = head
         final.append(pcm)

@@ -447,7 +447,7 @@ struct Rate: Equatable, Hashable, Sendable {
                                 let py = try Self.pythonForSynthesis(progress: progress)
                                 try Task.checkCancellation()
                                 try? FileManager.default.removeItem(at: outURL)
-                                let (status, stderr) = try self.run(
+                                let (status, stderr) = try await self.run(
                                     py,
                                     [synthTimingScript,
                                      "--text-file", textURL.path,
@@ -466,7 +466,7 @@ struct Rate: Equatable, Hashable, Sendable {
                                     lastError = "não gerou áudio: \(self.tail(stderr, max: 300))"
                                     throw self.makeError(lastError)
                                 }
-                                self.trimTrailingSilence(outURL)
+                                await self.trimTrailingSilence(outURL)
                                 progress("Sintetizando \(done.increment())/\(total)…")
                                 let (script, motivo) = self.loadSegments(jsonURL)
                                 if let motivo {
@@ -512,7 +512,7 @@ struct Rate: Equatable, Hashable, Sendable {
             for url in ordered {
                 chunkDurations[chunkURLs.firstIndex(of: url) ?? 0] = await duration(of: url)
             }
-            let outURL = try concat(ordered, into: dir.appendingPathComponent("EdgeSpeak.mp3"))
+            let outURL = try await concat(ordered, into: dir.appendingPathComponent("EdgeSpeak.mp3"))
             var segments: [Segment] = []
             var offset: Double = 0
             for i in 0..<total {
@@ -572,13 +572,13 @@ struct Rate: Equatable, Hashable, Sendable {
     }
 
     /// Junta as fatias num MP3 único (ffmpeg quando disponível).
-    private static func concat(_ ordered: [URL], into outURL: URL) throws -> URL {
+    private static func concat(_ ordered: [URL], into outURL: URL) async throws -> URL {
         let fm = FileManager.default
         if let ffmpeg = ffmpegPath {
             let listURL = outURL.deletingLastPathComponent().appendingPathComponent("list.txt")
             let list = ordered.map { "file '\($0.path)'" }.joined(separator: "\n") + "\n"
             try list.write(to: listURL, atomically: true, encoding: .utf8)
-            let (status, stderr) = try run(
+            let (status, stderr) = try await run(
                 ffmpeg,
                 ["-y", "-f", "concat", "-safe", "0", "-i", listURL.path, "-c", "copy", outURL.path])
             guard status == 0 else {
@@ -612,12 +612,12 @@ struct Rate: Equatable, Hashable, Sendable {
     /// total é medida do arquivo aparado. Troca só quando encolhe de verdade
     /// (>2 KB), para nunca trocar áudio igual por re-encode. Falha degrada
     /// em silêncio: mantém o original e a síntese segue.
-    private static func trimTrailingSilence(_ url: URL) {
+    private static func trimTrailingSilence(_ url: URL) async {
         guard let ffmpeg = ffmpegPath else { return }
         let tmp = url.deletingLastPathComponent()
             .appendingPathComponent("aparado-\(UUID().uuidString).mp3")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        guard let (status, _) = try? run(
+        guard let (status, _) = try? await run(
             ffmpeg, silenceTrimArgs(input: url, output: tmp),
             timeout: 120),
             status == 0,
@@ -709,6 +709,20 @@ struct Rate: Equatable, Hashable, Sendable {
     private static let keptLock = NSLock()
     private static var protectedDir: URL?
 
+    /// Diretório da leitura OFFLINE corrente (Piper), registrado via
+    /// `keepOfflineDirectory`: a purga do motor online também o preserva,
+    /// senão apagaria os WAVs ainda referenciados pela leitura em curso — o
+    /// replay depois caía no guarda silencioso do `restart` e nada tocava (M4).
+    private static var protectedOfflineDir: URL?
+
+    /// Registra o diretório offline como leitura corrente (ver M4).
+    /// Interna para a suíte cobrir a proteção cruzada entre os motores.
+    static func keepOfflineDirectory(_ url: URL) {
+        keptLock.lock()
+        protectedOfflineDir = url
+        keptLock.unlock()
+    }
+
     /// Contador de fatias concluídas, seguro para várias filas.
     private final class Counter: @unchecked Sendable {
         private let lock = NSLock()
@@ -728,16 +742,18 @@ struct Rate: Equatable, Hashable, Sendable {
 
     /// Executa um processo bloqueante; stderr vai para arquivo (sem risco de
     /// deadlock de pipe). Retorna status e o conteúdo de stderr.
-    private static func run(_ path: String, _ args: [String]) throws -> (status: Int32, stderr: String) {
-        try run(path, args, timeout: timeout(forChars: 100_000))
+    private static func run(_ path: String, _ args: [String]) async throws -> (status: Int32, stderr: String) {
+        try await run(path, args, timeout: timeout(forChars: 100_000))
     }
 
     /// Executa com prazo: se o processo não terminar a tempo, é terminado.
     /// Sem isso, uma falha de rede deixa o edge-tts pendurado e a UI em
-    /// "Sintetizando…" indefinidamente.
+    /// "Sintetizando…" indefinidamente. A espera usa `Task.sleep` (nunca
+    /// `Thread.sleep`): este `run` roda dentro do grupo de tarefas e dormir
+    /// na thread cooperativa a seguraria por até 600 s (B2).
     private static func run(
         _ path: String, _ args: [String], timeout: TimeInterval
-    ) throws -> (status: Int32, stderr: String) {
+    ) async throws -> (status: Int32, stderr: String) {
         let fm = FileManager.default
         let errURL = fm.temporaryDirectory
             .appendingPathComponent("edgespeak-stderr-\(UUID().uuidString).log")
@@ -777,14 +793,17 @@ struct Rate: Equatable, Hashable, Sendable {
         }
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
+            // Sono cancelável: com `try?` um `Task.sleep` cancelado voltaria
+            // na hora e o laço giraria quente até o prazo; no catch, saímos e
+            // o bloco abaixo encerra o processo.
+            do { try await Task.sleep(nanoseconds: 50_000_000) } catch { break }
         }
         if process.isRunning {
             process.terminate()
             // Dá um instante para o SIGTERM; depois força.
             let hard = Date().addingTimeInterval(2)
             while process.isRunning && Date() < hard {
-                Thread.sleep(forTimeInterval: 0.05)
+                do { try await Task.sleep(nanoseconds: 50_000_000) } catch { break }
             }
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
@@ -810,8 +829,9 @@ struct Rate: Equatable, Hashable, Sendable {
         let fm = FileManager.default
         keptLock.lock()
         let sheltered = protectedDir
+        let offline = protectedOfflineDir
         keptLock.unlock()
-        let keepURLs = [current.standardizedFileURL, sheltered?.standardizedFileURL]
+        let keepURLs = [current.standardizedFileURL, sheltered?.standardizedFileURL, offline?.standardizedFileURL]
             .compactMap { $0 }
         guard let items = try? fm.contentsOfDirectory(
             at: fm.temporaryDirectory,
