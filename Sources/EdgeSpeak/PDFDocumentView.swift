@@ -15,6 +15,12 @@ struct PDFDocumentView: NSViewRepresentable {
     var rects: [CGRect] = []
     /// Box of the word being read, in page coordinates; `nil` clears.
     var wordRect: CGRect? = nil
+    /// Page that OWNS `wordRect`. A sentence that crosses a page break keeps
+    /// the page where it starts, but its continuation words are boxes of the
+    /// next page: drawing them on the sentence's page put the yellow on the
+    /// wrong place (measured: 11 sentences and 628 words in Neutrality_v82).
+    /// `nil` falls back to the sentence's page.
+    var wordPage: Int? = nil
     /// Follow the reading: scrolls to the passage; when off, freezes the scroll.
     var follow: Bool = true
     /// Transient follow brake: a manual scroll holds ONLY for the moment;
@@ -295,7 +301,10 @@ struct PDFDocumentView: NSViewRepresentable {
         let phraseKey = key(page: page, rects: rects)
         let tokenChanged = revealToken != context.coordinator.lastToken
         let phraseChanged = phraseKey != context.coordinator.lastPhraseKey || tokenChanged
-        let wordChanged = page != context.coordinator.lastWordPage
+        // The word's own page, not the sentence's: they differ when the
+        // sentence crosses a page break.
+        let wordPageIndex = wordPage ?? page
+        let wordChanged = wordPageIndex != context.coordinator.lastWordPage
             || wordRect != context.coordinator.lastWordRect
 
         guard let page, let pdfPage = document.page(at: page) else {
@@ -309,16 +318,17 @@ struct PDFDocumentView: NSViewRepresentable {
             return
         }
         if wordChanged {
-            updateWordAnnotation(on: pdfPage, rect: wordRect, context.coordinator)
+            let wordOwnPage = wordPageIndex.flatMap { document.page(at: $0) } ?? pdfPage
+            updateWordAnnotation(on: wordOwnPage, rect: wordRect, context.coordinator)
             if let word = wordRect, Self.shouldScrollToWord(
                 follow: (follow && !scrollHold) || tokenChanged,
-                wordVisible: view.convert(view.visibleRect, to: pdfPage).intersects(word)
+                wordVisible: view.convert(view.visibleRect, to: wordOwnPage).intersects(word)
             ) {
                 Self.markProgrammaticScroll(context.coordinator)
-                view.go(to: word, on: pdfPage)
+                view.go(to: word, on: wordOwnPage)
             }
             context.coordinator.lastWordRect = wordRect
-            context.coordinator.lastWordPage = page
+            context.coordinator.lastWordPage = wordPageIndex
         }
         guard !rects.isEmpty else {
             clearPhraseAnnotations(context.coordinator)

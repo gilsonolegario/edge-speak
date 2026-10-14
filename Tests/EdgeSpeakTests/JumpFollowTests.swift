@@ -15,13 +15,13 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct JumpFollowTests {
-    /// 8 sentences of 0.5 s each, as silence in a valid 8 kHz mono WAV (4 s).
+    /// 200 sentences of 0.5 s each, as silence in a valid 8 kHz mono WAV (100 s).
     ///
-    /// The slice is deliberately longer than the polls below: the suite runs in
-    /// parallel with the rest of the process, where the main run loop can be
-    /// busy for a whole second or two. With a 1.2 s slice the audio reached the
-    /// end of the queue before the poll ran out, and the check was really
-    /// measuring the wrong thing.
+    /// The slice is deliberately far longer than any poll below: the suite runs in
+    /// parallel with the rest of the process (and with whatever else the machine
+    /// is doing), so the slice must never END while the test waits — with a short
+    /// one the audio could reach the end of the queue before the karaoke tick
+    /// fired, and the check would be measuring the wrong thing.
     private func fixture() -> (player: StreamingPlayer, dir: URL) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("EdgeSpeak-follow-\(UUID().uuidString)")
@@ -30,14 +30,14 @@ struct JumpFollowTests {
         var data = Data()
         func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
         func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
-        let amostras = 32000  // 4 s
+        let amostras = 800_000  // 100 s
         data.append(contentsOf: "RIFF".utf8); u32(36 + UInt32(amostras * 2)); data.append(contentsOf: "WAVE".utf8)
         data.append(contentsOf: "fmt ".utf8); u32(16); u16(1); u16(1); u32(8000); u32(16000); u16(2); u16(16)
         data.append(contentsOf: "data".utf8); u32(UInt32(amostras * 2))
         data.append(Data(count: amostras * 2))
         try? data.write(to: url)
         let player = StreamingPlayer()
-        player.start(urls: [url], durations: [4.0], chunkSegments: [(0..<8).map { i in
+        player.start(urls: [url], durations: [100.0], chunkSegments: [(0..<200).map { i in
             EdgeTTS.Segment(start: Double(i) * 0.5, duration: 0.5,
                             text: "frase \(i)", index: i, page: nil, rects: [])
         }])
@@ -53,7 +53,10 @@ struct JumpFollowTests {
     /// the delegate clears the highlight (-1), which is a move without the tick
     /// ever having run. Measured — the test passed against the unfixed code that
     /// way.
-    private func maxIndexSeen(limit: Int = 40, _ read: () -> Int) async -> Int {
+    /// Generous budget: the tick is a main-run-loop `Timer`, and with the app
+    /// synthesizing in parallel the loop can be busy for seconds. A dead tick
+    /// never recovers, so a long budget only costs time in the failing case.
+    private func maxIndexSeen(limit: Int = 120, _ read: () -> Int) async -> Int {
         var best = read()
         for _ in 0..<limit {
             if best >= 2 { return best }

@@ -127,10 +127,21 @@ final class WordAligner {
 
     /// Test shortcut: box of word `target` already aligned.
     func box(aligned: [Int?], target: Int, pdf: [Box]) -> CGRect? {
+        entry(aligned: aligned, target: target, in: pdf)?.rect
+    }
+
+    /// The PDF box matched to the spoken word `target`, whole — not just its
+    /// rectangle: whoever draws it needs to know WHICH PAGE it is on.
+    private func entry(aligned: [Int?], target: Int, in boxes: [Box]) -> Box? {
         guard target >= 0, target < aligned.count,
-              let k = aligned[target], k >= 0, k < pdf.count
+              let k = aligned[target], k >= 0, k < boxes.count
         else { return nil }
-        return pdf[k].rect
+        return boxes[k]
+    }
+
+    /// Whole box of the cached alignment.
+    func entry(aligned: [Int?], target: Int) -> Box? {
+        entry(aligned: aligned, target: target, in: cachedBoxes)
     }
 
     // MARK: - Per-sentence cache
@@ -140,19 +151,50 @@ final class WordAligner {
     private var mapping: [Int?] = []
     private var spokenCount = -1
     private var boxCount = -1
+    /// Boxes of the saved alignment: kept so `entry` can return the whole box
+    /// (the page matters) without re-running the alignment.
+    private var cachedBoxes: [Box] = []
+
+    /// Drops the saved alignment: the cache key (sentence + counts) repeats
+    /// across documents, so opening a new PDF with the same counts reused the
+    /// old document's boxes and the PDF yellow drifted. Called when the
+    /// displayed text identity changes (document or text mode).
+    func invalidate() {
+        currentSentence = -1
+        mapping = []
+        spokenCount = -1
+        boxCount = -1
+        cachedBoxes = []
+    }
+
+    /// Aligns once per sentence and keeps the boxes it aligned against.
+    /// Called on every highlight tick (10 Hz): the alignment is O(n·m) and
+    /// cannot run on every frame.
+    private func cache(sentence: Int, spokenWords: [String], pdf: [Box]) {
+        guard sentence != currentSentence
+                || spokenWords.count != spokenCount
+                || pdf.count != boxCount else { return }
+        currentSentence = sentence
+        spokenCount = spokenWords.count
+        boxCount = pdf.count
+        cachedBoxes = pdf
+        mapping = align(spokenWords: spokenWords, pdf: pdf)
+    }
 
     /// Box of word `target` of sentence `sentence`, aligning once and reusing
     /// while it is the same sentence. Called on every highlight tick (10 Hz): the
     /// alignment is O(n·m) and cannot run on every frame.
     func box(sentence: Int, target: Int, spokenWords: [String], pdf: [Box]) -> CGRect? {
-        if sentence != currentSentence
-            || spokenWords.count != spokenCount
-            || pdf.count != boxCount {
-            currentSentence = sentence
-            spokenCount = spokenWords.count
-            boxCount = pdf.count
-            mapping = align(spokenWords: spokenWords, pdf: pdf)
-        }
+        cache(sentence: sentence, spokenWords: spokenWords, pdf: pdf)
         return box(aligned: mapping, target: target, pdf: pdf)
+    }
+
+    /// Whole box (page included) of word `target` of `sentence`: the PDF yellow
+    /// needs the page that owns the word, which is not always the sentence's.
+    func boxEntry(
+        sentence: Int, target: Int, spokenWords: [String], pdf: [Box]
+    ) -> Box? {
+        cache(sentence: sentence, spokenWords: spokenWords, pdf: pdf)
+        return entry(aligned: mapping, target: target)
     }
 }
