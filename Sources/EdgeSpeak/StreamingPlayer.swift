@@ -181,7 +181,15 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     /// Posição global atual: deslocamento da fatia em reprodução mais o tempo
-    /// dentro dela.
+    /// dentro dela, lido do `AVAudioPlayer` NA HORA da leitura.
+    ///
+    /// Por que ler na hora em vez de guardar: o `elapsed` publicado é um
+    /// retrato a ~10 Hz (tique do karaokê) e congela na troca de fatia — o
+    /// trilho ficava até ~130 ms preso no valor antigo enquanto o áudio já
+    /// andava. Esta leitura segue a posição tocada de verdade, então é ela
+    /// que alimenta o trilho (via `SpeechController.elapsed`). Limite
+    /// conhecido: com durações ainda não medidas os deslocamentos são
+    /// aproximados até as sondas chegarem — só o mapa, não o relógio.
     var currentGlobalTime: TimeInterval {
         guard nextIndex < chunkOffsets.count else {
             return knownDuration

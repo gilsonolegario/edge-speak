@@ -541,7 +541,12 @@ final class SpeechController: ObservableObject {
     }
 
     /// Tempo já reproduzido e duração conhecida, para a barra de navegação.
-    var elapsed: TimeInterval { streamer.elapsed }
+    ///
+    /// O tempo é a posição TOCADA (`currentTime` da fatia corrente + seu
+    /// deslocamento), lida no `AVAudioPlayer` a cada acesso — não o retrato
+    /// a ~10 Hz do karaokê, que atrasa e congela na troca de fatia. Com a
+    /// fila esvaziada ou a leitura terminada, vale o fim do áudio medido.
+    var elapsed: TimeInterval { streamer.currentGlobalTime }
     var knownDuration: TimeInterval { streamer.knownDuration }
 
     /// Salta para um instante. É o que faz a barra arrastável.
@@ -625,7 +630,8 @@ final class SpeechController: ObservableObject {
     func stopPlayback() {
         pendingJumpIndex = nil
         // O `stop` zera o relógio: captura antes, para a retomada saber de onde.
-        let pos = streamer.elapsed
+        // Posição tocada (não o retrato do karaokê): a mesma do trilho.
+        let pos = elapsed
         let doc = documentIDForPosition
         let voz = voiceInUse
         streamer.stop()
@@ -644,7 +650,7 @@ final class SpeechController: ObservableObject {
     /// Sem documento (modo só-texto) ou sem voz em uso, não há o que ancorar.
     private func savePositionNow() {
         guard let doc = documentIDForPosition, !voiceInUse.isEmpty else { return }
-        ReadingPositionStore.save(documentID: doc, voice: voiceInUse, position: streamer.elapsed)
+        ReadingPositionStore.save(documentID: doc, voice: voiceInUse, position: elapsed)
     }
 
     /// Leitura concluída: esquece a posição (reabrir começa do zero).
