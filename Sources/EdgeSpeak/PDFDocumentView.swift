@@ -17,6 +17,9 @@ struct PDFDocumentView: NSViewRepresentable {
     var wordRect: CGRect? = nil
     /// Seguir a leitura: rola até o trecho; desligado, congela a rolagem.
     var follow: Bool = true
+    /// Freio transitório do seguimento: rolagem manual prende SÓ no momento;
+    /// qualquer avanço do destaque o solta. O mestre (`follow`) continua valendo.
+    var scrollHold: Bool = false
     /// Cada mudança força voltar ao trecho mesmo com follow desligado.
     var revealToken: Int = 0
     /// Rolagem iniciada pelo usuário: o dono desliga o seguimento aqui (a
@@ -249,7 +252,7 @@ struct PDFDocumentView: NSViewRepresentable {
             // Seguir a leitura mira a caixa da palavra, mas só rola quando ela
             // está fora da área visível: rolar a cada palavra engasga a fala.
             if let word = wordRect, Self.shouldScrollToWord(
-                follow: follow,
+                follow: (follow && !scrollHold) || tokenChanged,
                 wordVisible: view.convert(view.visibleRect, to: pdfPage).intersects(word)
             ) {
                 Self.markProgrammaticScroll(context.coordinator)
@@ -262,7 +265,7 @@ struct PDFDocumentView: NSViewRepresentable {
             // Sem caixas (texto sem PDF): limpa a frase, só rola até a página.
             clearPhraseAnnotations(context.coordinator)
             view.setCurrentSelection(nil, animate: false)
-            if follow || tokenChanged {
+            if (follow && !scrollHold) || tokenChanged {
                 Self.markProgrammaticScroll(context.coordinator)
                 view.go(to: pdfPage)
             }
@@ -284,7 +287,7 @@ struct PDFDocumentView: NSViewRepresentable {
                 context.coordinator.phraseAnnotations.append(annot)
             }
             context.coordinator.phrasePage = pdfPage
-            if follow || tokenChanged {
+            if (follow && !scrollHold) || tokenChanged {
                 let box = rects.dropFirst().reduce(rects[0]) { $0.union($1) }
                 Self.markProgrammaticScroll(context.coordinator)
                 view.go(to: box, on: pdfPage)

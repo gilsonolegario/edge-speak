@@ -87,6 +87,17 @@ Repo público com histórico desde `0aa5658`.
   1–15): leitura de corpo só é demonstrável noutro PDF.
 - Símbolo que chega como imagem não é lido; voz online depende do endpoint.
 
+## Sugestões não pedidas (triagem do orquestrador, 2026-10-14)
+
+- [FEITO] Retomar por documento: já existe (ReadingPositionStore + retomada).
+- [FUTURO] Temporizador de parada: barato e útil; entra após as pendências.
+- [FUTURO] Log diagnóstico copiável (versões, venv, último erro): barato e
+  necessário ao suporte do amigo via GitHub; entra após as pendências.
+- [IDEIA] Dicionário de pronúncia, exportação com tempos, fila de
+  documentos, sumário como capítulos: valor real, custo moderado; sem dono.
+- [NÃO] Modo ditado (fora do propósito do app), estatísticas (vaidade),
+  IDs estáveis entre modos (sem consumidor que precise — YAGNI).
+
 ## Documentação e mapa (pedidos)
 
 - [OBRA] Documentação completa (README/INTERFACE) — agente com rate limit,

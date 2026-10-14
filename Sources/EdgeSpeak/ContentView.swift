@@ -23,6 +23,12 @@ struct ContentView: View {
     @State private var showingImporter = false
     /// Segue a frase lida no PDF; desligar congela a rolagem.
     @AppStorage(AppSetting.followKey) private var followReading: Bool = AppSetting.followDefault
+    /// Freio transitório do seguimento: a rolagem manual vence o destaque SÓ
+    /// no momento — qualquer avanço do destaque o solta e a vista volta a
+    /// acompanhar (antes, um scroll desligava o `followReading` persistido
+    /// para sempre e o destaque nunca mais atravessava a página). Não é
+    /// persistido; o interruptor de Ajustes (`followReading`) continua valendo.
+    @State private var scrollHold = false
     /// Lê corpos de notas de rodapé (default ligado); desligado, marcadores
     /// viram pausa e corpos saem da lista de leitura.
     @AppStorage(AppSetting.footnoteKey) private var lêNotas: Bool = AppSetting.footnoteDefault
@@ -442,6 +448,9 @@ struct ContentView: View {
                 if busy { revealStatus() } else { showStatusBriefly() }
             }
             .onChange(of: integralMode) { _, _ in handleIntegralModeChange() }
+            // Qualquer avanço do destaque solta o freio transitório e a vista
+            // volta a acompanhar.
+            .onChange(of: controller.highlightIndex) { _, _ in scrollHold = false }
             .onChange(of: appLanguageRaw) { _, _ in controller.refreshLocale(idioma) }
     }
 
@@ -488,8 +497,9 @@ struct ContentView: View {
                         wordRect: (isReading || controller.isBusy)
                             ? currentWordRect : nil,
                         follow: followReading,
+                        scrollHold: scrollHold,
                         revealToken: revealToken,
-                        onUserScroll: { followReading = false },
+                        onUserScroll: { scrollHold = true },
                         onPageClick: { page, point in
                             // Clique no PDF toca a partir da frase clicada;
                             // na margem (nil) ignora; sem áudio ainda, começa
@@ -499,15 +509,15 @@ struct ContentView: View {
                             else { return }
                             clickToPlay(index: idx)
                         })
-                    // A rolagem manual desliga o follow (o PDFDocumentView avisa
-                    // via onUserScroll); o botão aparece quando o follow está
-                    // desligado, durante a leitura.
-                    if (isReading || controller.isBusy) && !followReading {
+                    // A rolagem manual prende o freio transitório (o PDFDocumentView
+                    // avisa via onUserScroll); o botão aparece com o mestre ligado
+                    // + freio, durante a leitura, e solta o freio saltando ao trecho.
+                    if (isReading || controller.isBusy) && followReading && scrollHold {
                         HStack {
                             Spacer()
                             Button {
+                                scrollHold = false
                                 revealToken += 1
-                                followReading = true
                             } label: {
                                 Label(L.get("ui.goToPassage", locale: idioma), systemImage: "location.fill")
                             }
@@ -589,6 +599,7 @@ struct ContentView: View {
         // desligado nunca rola sozinho). Também religa o seguimento, pelo
         // mesmo motivo do togglePlay.
         revealToken += 1
+        scrollHold = false
         followReading = true
         if controller.jumpToSegment(index) { return }
         // Sem `hasAudio` aqui de propósito: ele fica true após o Stop (a fila
