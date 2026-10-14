@@ -594,12 +594,10 @@ final class SpeechController: ObservableObject {
             isPlaying = streamer.isPlaying
             isPaused = streamer.isPaused
             show("status.playing")
-            StreamingPlayer.navLog("ctl-jump idx=\(index) ok")
             return true
         } else {
             pendingJumpIndex = index
             show("status.generatingPassage")
-            StreamingPlayer.navLog("ctl-jump idx=\(index) pending")
             return false
         }
     }
@@ -614,10 +612,8 @@ final class SpeechController: ObservableObject {
             isPlaying = streamer.isPlaying
             isPaused = streamer.isPaused
             show("status.playing")
-            StreamingPlayer.navLog("retry idx=\(pending) ok")
             return true
         }
-        StreamingPlayer.navLog("retry idx=\(pending) miss")
         return false
     }
 

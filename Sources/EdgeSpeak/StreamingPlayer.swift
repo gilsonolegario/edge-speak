@@ -267,7 +267,6 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// state machine.
     private func gotoChunk(_ chunk: Int, within: TimeInterval) {
         guard chunk < queue.count else { return }
-        Self.navLog("goto chunk=\(chunk) within=\(String(format: "%.2f", within)) next=\(nextIndex) hasCurrent=\(current != nil)")
         // `isFinished` counts as "play": dragging backwards after the
         // audio ended must resume playing, not stay still.
         // `isStarved` too: an emptied queue with synthesis in progress is a wait,
@@ -282,20 +281,38 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             nextIndex = chunk
             playChunk(queue[chunk])
         }
-        current?.currentTime = min(within, current?.duration ?? within)
+        // A jump positions real audio: the pre-buffer hold is spent. Without
+        // this, the release in `enqueue`/`markSynthesisComplete` fires on top of
+        // a jump made while buffering and replays the slice from zero — the
+        // sentence just clicked is heard twice (measured: position 0.0 s where
+        // the jump had put it at 0.4 s).
+        startPending = false
+        isBuffering = false
+        // The position is the INTENDED offset, not a `currentTime` read: right
+        // after `play()` the getter still answers with the previous audio clock
+        // (measured 0.31 s for a 0.40 s target, converging ~100 ms later), which
+        // put the highlight on the previous sentence.
+        let targetTime = min(within, current?.duration ?? within)
+        current?.currentTime = targetTime
         elapsed = (chunk < chunkOffsets.count ? chunkOffsets[chunk] : knownDuration)
-            + (current?.currentTime ?? within)
+            + targetTime
         isFinished = false
         if wasPlaying, current != nil {
             current?.play()
             isPlaying = true
             isPaused = false
+            // The karaoke tick dies with `pause()`. A jump inside the SAME slice
+            // does not go through `playChunk`, so nothing reinstalls it here —
+            // and `play()` cannot: it returns early, the player is already
+            // playing. Measured: the audio went from 0.4 s to 0.8 s with the
+            // highlight still on the sentence before the click.
+            installHighlightTimer()
         } else {
             isPlaying = false
             isPaused = current != nil
-            pausedAt = current?.currentTime ?? 0
+            pausedAt = targetTime
         }
-        updateHighlight(at: current?.currentTime ?? 0)
+        updateHighlight(at: targetTime)
     }
 
     /// Jumps to the start of the sentence with global index `index`, going STRAIGHT to the
@@ -325,7 +342,6 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @discardableResult
     func jumpToSegment(_ index: Int) -> Bool {
         guard seek(toSegment: index) else { return false }
-        Self.navLog("jump idx=\(index) chunk=\(nextIndex)")
         play()
         return true
     }
@@ -424,7 +440,6 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func playChunk(_ url: URL) {
-        Self.navLog("playChunk idx=\(nextIndex)")
         guard nextIndex < queue.count else {
             handleExhausted()
             return
@@ -489,48 +504,10 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// Nudge state: when the timed word stalls while its sentence continues
     /// (timings exhausted by expansions like years), the yellow would freeze
     /// and jump — it creeps instead, one word per ~0.9 s, never past the last
-    /// timed word. Reset on every real change; every nudge is probe-marked.
+    /// timed word. Reset on every real change.
     private var nudgeWord = -1
     private var nudgeSince = 0.0
     private var nudgeSeg = -1
-    private var nudgedNow = false
-    /// TEMP diagnostic: navigation trace (jump/seek/play-chunk) into the lag
-    /// log. Removed after the repeat investigation.
-    static func navLog(_ s: String) {
-        let line = String(format: "%.3f NAV %@\n", Date().timeIntervalSince1970, s)
-        guard let data = line.data(using: .utf8) else { return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edgespeak-lag.log")
-        if FileManager.default.fileExists(atPath: url.path),
-           let h = try? FileHandle(forWritingTo: url) {
-            try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close()
-        } else {
-            try? data.write(to: url)
-        }
-    }
-
-    /// TEMP diagnostic: 1 Hz + on-change trace of audio time vs shown
-    /// segment/word. Removed after the lag investigation.
-    private var lagProbeCount = 0
-    private var lagProbeLast = ""
-    private func lagProbe(audioTime: Double, chunk: Int, seg: Int, word: Int) {
-        lagProbeCount += 1
-        let key = "\(seg)#\(word)"
-        let changed = key != lagProbeLast
-        lagProbeLast = key
-        guard changed || lagProbeCount % 10 == 0 else { return }
-        let line = String(format: "%.3f %.3f %d %d %d %@\n",
-                          Date().timeIntervalSince1970, audioTime, chunk, seg, word,
-                          nudgedNow ? "nudge" : (changed ? "chg" : "hb"))
-        guard let data = line.data(using: .utf8) else { return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edgespeak-lag.log")
-        if FileManager.default.fileExists(atPath: url.path),
-           let h = try? FileHandle(forWritingTo: url) {
-            try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close()
-        } else {
-            try? data.write(to: url)
-        }
-    }
-
     private func updateHighlight(at seconds: Double) {
         elapsed = nextIndex < chunkOffsets.count
             ? chunkOffsets[nextIndex] + seconds
@@ -560,20 +537,16 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             var word = wordIndex(in: seg.words, at: seconds)
             // Timed word stalled while the sentence continues: creep forward
             // instead of freezing (expansions exhaust the timed words).
-            nudgedNow = false
             if word == nudgeWord, seg.index == nudgeSeg, word >= 0, word + 1 < seg.words.count,
                seconds - nudgeSince >= 0.9 {
                 word += 1
                 nudgeWord = word
                 nudgeSince = seconds
-                nudgedNow = true
             } else if word != nudgeWord || seg.index != nudgeSeg {
                 nudgeSeg = seg.index
                 nudgeWord = word
                 nudgeSince = seconds
             }
-            let global = nextIndex < chunkOffsets.count ? chunkOffsets[nextIndex] + seconds : seconds
-            lagProbe(audioTime: global, chunk: nextIndex, seg: seg.index, word: word)
             if seg.text != currentSegmentText { currentSegmentText = seg.text }
             if seg.index != currentSegmentIndex { currentSegmentIndex = seg.index }
             if seg.page != currentSegmentPage { currentSegmentPage = seg.page }
