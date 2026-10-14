@@ -167,7 +167,7 @@ struct StreamingProofTests {
             var data = Data()
             func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
             func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
-            let amostras = 8000
+            let amostras = 2000
             data.append(contentsOf: "RIFF".utf8); u32(36 + UInt32(amostras * 2)); data.append(contentsOf: "WAVE".utf8)
             data.append(contentsOf: "fmt ".utf8); u32(16); u16(1); u16(1); u32(8000); u32(16000); u16(2); u16(16)
             data.append(contentsOf: "data".utf8); u32(UInt32(amostras * 2))
@@ -179,14 +179,14 @@ struct StreamingProofTests {
             [EdgeTTS.Segment(start: 0, duration: 1, text: text, index: index, page: nil, rects: [])]
         }
         let player = StreamingPlayer()
-        player.start(urls: [wav("c0.wav")], durations: [1], chunkSegments: [segs("zero", 0)],
+        player.start(urls: [wav("c0.wav")], durations: [0.25], chunkSegments: [segs("zero", 0)],
                      minStart: StreamingPlayer.minStartChunks)
         #expect(player.isBuffering == true)
         #expect(player.isPlaying == false)
-        player.enqueue(urls: [wav("c1.wav")], durations: [1], chunkSegments: [segs("one", 1)])
+        player.enqueue(urls: [wav("c1.wav")], durations: [0.25], chunkSegments: [segs("one", 1)])
         #expect(player.isBuffering == true)
         #expect(player.isPlaying == false)
-        player.enqueue(urls: [wav("c2.wav")], durations: [1], chunkSegments: [segs("two", 2)])
+        player.enqueue(urls: [wav("c2.wav")], durations: [0.25], chunkSegments: [segs("two", 2)])
         #expect(player.isBuffering == false)
         #expect(player.isPlaying == true)
         #expect(player.currentChunkIndex == 0)
@@ -196,6 +196,37 @@ struct StreamingProofTests {
     @Test func finishedSynthesisReleasesHeldStart() {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("EdgeSpeak-prebuf2-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func wav(_ nome: String) -> URL {
+            let url = dir.appendingPathComponent(nome)
+            var data = Data()
+            func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+            func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+            let amostras = 2000
+            data.append(contentsOf: "RIFF".utf8); u32(36 + UInt32(amostras * 2)); data.append(contentsOf: "WAVE".utf8)
+            data.append(contentsOf: "fmt ".utf8); u32(16); u16(1); u16(1); u32(8000); u32(16000); u16(2); u16(16)
+            data.append(contentsOf: "data".utf8); u32(UInt32(amostras * 2))
+            data.append(Data(count: amostras * 2))
+            try? data.write(to: url)
+            return url
+        }
+        let player = StreamingPlayer()
+        player.start(urls: [wav("c0.wav")], durations: [0.25],
+                     chunkSegments: [[EdgeTTS.Segment(start: 0, duration: 1, text: "zero", index: 0, page: nil, rects: [])]],
+                     minStart: StreamingPlayer.minStartChunks)
+        #expect(player.isBuffering == true)
+        player.markSynthesisComplete()
+        #expect(player.isBuffering == false)
+        #expect(player.isPlaying == true)
+    }
+
+    /// Click during the buffer keeps its offset on release: without the
+    /// restore, the release replayed the slice from zero and the first
+    /// sentence was heard twice.
+    @Test func clickDuringBufferKeepsOffsetOnRelease() {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EdgeSpeak-prebuf3-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         func wav(_ nome: String) -> URL {
@@ -213,11 +244,25 @@ struct StreamingProofTests {
         }
         let player = StreamingPlayer()
         player.start(urls: [wav("c0.wav")], durations: [1],
-                     chunkSegments: [[EdgeTTS.Segment(start: 0, duration: 1, text: "zero", index: 0, page: nil, rects: [])]],
+                     chunkSegments: [[
+                        EdgeTTS.Segment(start: 0, duration: 0.4, text: "zero", index: 0, page: nil, rects: []),
+                        EdgeTTS.Segment(start: 0.4, duration: 0.6, text: "one", index: 1, page: nil, rects: []),
+                     ]],
                      minStart: StreamingPlayer.minStartChunks)
         #expect(player.isBuffering == true)
-        player.markSynthesisComplete()
+        #expect(player.jumpToSegment(1) == true)
+        #expect(player.elapsed == 0.4)
+        // The jumped (paused) player sits at the offset, not at zero:
+        // without creating the player here the release replayed from zero.
+        #expect(player.currentGlobalTime == 0.4)
+        player.enqueue(urls: [wav("c1.wav")], durations: [1], chunkSegments: [[
+            EdgeTTS.Segment(start: 0, duration: 1, text: "two", index: 2, page: nil, rects: []),
+        ]])
+        player.enqueue(urls: [wav("c2.wav")], durations: [1], chunkSegments: [[
+            EdgeTTS.Segment(start: 0, duration: 1, text: "three", index: 3, page: nil, rects: []),
+        ]])
         #expect(player.isBuffering == false)
-        #expect(player.isPlaying == true)
+        #expect(player.currentChunkIndex == 0)
+        #expect(player.elapsed == 0.4)
     }
 }

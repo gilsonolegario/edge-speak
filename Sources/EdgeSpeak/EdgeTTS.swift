@@ -225,7 +225,10 @@ struct Rate: Equatable, Hashable, Sendable {
     static let maxAttemptsPerChunk = 3
 
     /// Groups whole sentences into slices of <= maxChars, with the FIRST one short,
-    /// preferring to cut at a paragraph end.
+    /// preferring to cut at a paragraph end — and NEVER after a phrase without
+    /// terminal punctuation (a sentence split across pages comes as passages;
+    /// cutting between them reads the sentence with a gap in the middle).
+    /// A hard ceiling of 2x the cap still splits runaway text (no stall).
     ///
     /// A sentence is never cut in half: the script returns ~1 event per sentence and
     /// the pairing by order becomes the global index. First one short so the
@@ -237,6 +240,13 @@ struct Rate: Equatable, Hashable, Sendable {
         maxChars: Int,
         firstChars: Int = 450
     ) -> [[TextImport.Phrase]] {
+        /// A cut is only clean after terminal punctuation (trailing closers
+        /// don't count as continuation).
+        func endsCleanly(_ text: String) -> Bool {
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'”’»)]"))
+            return t.last.map { ".!?…".contains($0) } ?? false
+        }
         var out: [[TextImport.Phrase]] = []
         var current: [TextImport.Phrase] = []
         var count = 0
@@ -259,6 +269,15 @@ struct Rate: Equatable, Hashable, Sendable {
                     count = rest.reduce(0) { $0 + $1.text.count }
                         + max(0, rest.count - 1)
                     first = false
+                    continue
+                }
+                // Mid-sentence (page-split passages, runaway prose): carries on
+                // to the next terminal punctuation, up to a hard 2x ceiling.
+                if let last = current.last, !endsCleanly(last.text), count + add <= 2 * cap {
+                    if !current.isEmpty { count += 1 }
+                    current.append(phrase)
+                    count += size
+                    i += 1
                     continue
                 }
                 out.append(current)
@@ -464,9 +483,18 @@ struct Rate: Equatable, Hashable, Sendable {
                                     lastError = "no audio produced: \(self.tail(stderr, max: 300))"
                                     throw self.makeError(detail: lastError)
                                 }
-                                await self.trimTrailingSilence(outURL)
+                                let leading = await self.trimSilence(outURL)
                                 progress(L.get("progress.chunkFraction", locale: locale, args: done.increment(), total))
-                                let (script, reason) = self.loadSegments(jsonURL, locale: locale)
+                                let (rawScript, reason) = self.loadSegments(jsonURL, locale: locale)
+                                // Leading trim moves every sound earlier: shifts the
+                                // sentence (and word) times by the removed lead.
+                                let script = leading > 0 ? rawScript.map { seg in Segment(
+                                    start: max(0, seg.start - leading), duration: seg.duration,
+                                    text: seg.text,
+                                    words: seg.words.map { w in Segment.Word(
+                                        start: max(0, w.start - leading), duration: w.duration, text: w.text) },
+                                    index: seg.index, page: seg.page, rects: seg.rects)
+                                } : rawScript
                                 if let reason {
                                     // Status warning: without timings the chunk still plays,
                                     // but highlight and click-jump collapse.
@@ -594,22 +622,55 @@ struct Rate: Equatable, Hashable, Sendable {
         return outURL
     }
 
-    /// ffmpeg arguments to trim the END silence of the slice. Factored
+    /// ffmpeg arguments to trim the edge silences of the slice. Factored
     /// pure for testing (the rule lives here, not spread in the caller).
     static func silenceTrimArgs(input: URL, output: URL) -> [String] {
         ["-y", "-i", input.path,
-         "-af", "silenceremove=stop_periods=-1:stop_duration=0.3:stop_threshold=-50dB",
+         "-af", "silenceremove=start_periods=1:start_duration=0.15:start_threshold=-45dB,silenceremove=stop_periods=-1:stop_duration=0.3:stop_threshold=-50dB",
          output.path]
     }
 
-    /// Trims the END silence of the slice (when ffmpeg is available): without this each
-    /// boundary carries the TTS final breath and the transition stutters. Only the
-    /// end — the intact beginning preserves the sentence times, and the total
-    /// duration is measured from the trimmed file. Swaps only when it truly shrinks
-    /// (>2 KB), so it never swaps identical audio for a re-encode. Failure degrades
-    /// silently: keeps the original and the synthesis proceeds.
-    private static func trimTrailingSilence(_ url: URL) async {
-        guard let ffmpeg = ffmpegPath else { return }
+    /// Parses the leading silence from a `silencedetect` stderr: the end of
+    /// the silence starting at 0, else 0. Pure for testing.
+    static func parseLeadingSilence(_ stderr: String) -> TimeInterval {
+        var currentStart: Double?
+        for line in stderr.components(separatedBy: .newlines) {
+            if line.contains("silence_start:") {
+                currentStart = Double(line.split(separator: ":").last?.trimmingCharacters(in: .whitespaces) ?? "")
+            } else if line.contains("silence_end:"), currentStart == 0 {
+                let tail = line.split(separator: "|").first ?? ""
+                if let end = Double(tail.split(separator: ":").last?.trimmingCharacters(in: .whitespaces) ?? "") {
+                    return max(0, end)
+                }
+            }
+        }
+        return 0
+    }
+
+    /// Leading silence of the file, measured (fast pass, no rewrite).
+    private static func leadingSilence(of url: URL) async -> TimeInterval {
+        guard let ffmpeg = ffmpegPath else { return 0 }
+        guard let (_, stderr) = try? await run(
+            ffmpeg,
+            ["-hide_banner", "-i", url.path,
+             "-af", "silencedetect=noise=-45dB:d=0.15", "-f", "null", "-"],
+            timeout: 60)
+        else { return 0 }
+        return parseLeadingSilence(stderr)
+    }
+
+    /// Trims the edge silences of the slice (when ffmpeg is available): without this each
+    /// boundary carries the TTS breath and the transition stutters — and the
+    /// untrimmed LEAD delays every highlight by its length (measured 0.19 s).
+    /// Returns the leading seconds removed, so the caller shifts the sentence
+    /// times by the same amount (trailing trim never moves a start).
+    /// The total duration is measured from the trimmed file. Swaps only when
+    /// it truly shrinks (>2 KB), so it never swaps identical audio for a
+    /// re-encode. Failure degrades silently: keeps the original (shift 0)
+    /// and the synthesis proceeds.
+    private static func trimSilence(_ url: URL) async -> TimeInterval {
+        guard let ffmpeg = ffmpegPath else { return 0 }
+        let leading = await leadingSilence(of: url)
         let tmp = url.deletingLastPathComponent()
             .appendingPathComponent("aparado-\(UUID().uuidString).mp3")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -619,9 +680,10 @@ struct Rate: Equatable, Hashable, Sendable {
             status == 0,
             let antes = fileSize(url), let depois = fileSize(tmp),
             depois > 0, antes > depois + 2048
-        else { return }
+        else { return 0 }
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.moveItem(at: tmp, to: url)
+        return leading
     }
 
     /// Reads the sentence times written by synth_timing.py.

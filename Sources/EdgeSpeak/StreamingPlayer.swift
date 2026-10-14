@@ -78,7 +78,21 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var isBuffering = false
     private var startPending = false
 
-    var pendingCount: Int { queue.count }
+    /// Buffered enough to start: the first slices are in AND their durations
+    /// measured. With zeroed durations the sentence→time map is approximate
+    /// until the probes land, and the highlight lags from the second sentence
+    /// on — so the pre-buffer waits for the map, not just the audio.
+    private var startReady: Bool {
+        guard queue.count >= Self.minStartChunks else { return false }
+        return queue.indices.prefix(Self.minStartChunks).allSatisfy { chunkDurations[$0] > 0 }
+    }
+
+    /// Restores a click-jump offset after a (re)start from zero: without this,
+    /// a jump made while buffered replays the slice from its first sentence.
+    private func restorePausedOffset() {
+        guard isPaused, pausedAt > 0, let duration = current?.duration, duration > 0 else { return }
+        current?.currentTime = min(pausedAt, duration)
+    }
 
     /// Index of the slice being played (for the UI to show progress).
     var currentChunkIndex: Int { nextIndex }
@@ -129,11 +143,17 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         chunkSegments.append(contentsOf: segments)
         chunkDurations.append(contentsOf: Self.resolvedDurations(durations, count: urls.count))
         recomputeOffsets()
-        // Pre-buffered start releases at the threshold.
-        if startPending, queue.count >= Self.minStartChunks {
+        // Pre-buffered start releases when the map is ready (slices +
+        // measured durations). A click-jump during the buffer keeps its
+        // offset: releasing from zero would replay the slice's first
+        // sentence (heard twice).
+        if startPending, startReady {
             startPending = false
             isBuffering = false
-            if nextIndex < queue.count { playChunk(queue[nextIndex]) }
+            if nextIndex < queue.count {
+                playChunk(queue[nextIndex])
+                restorePausedOffset()
+            }
         }
         // Audio arrived with the queue emptied: resumes where it stopped.
         if isStarved, nextIndex < queue.count {
@@ -255,7 +275,7 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         // became a no-op (`player.isPlaying` already true): the UI lied.
         let wasPlaying = isPlaying || isPaused || isFinished || isStarved
 
-        if chunk != nextIndex {
+        if chunk != nextIndex || current == nil {
             current?.stop()
             current = nil
             nextIndex = chunk
@@ -393,7 +413,10 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         if startPending {
             startPending = false
             isBuffering = false
-            if nextIndex < queue.count { playChunk(queue[nextIndex]) }
+            if nextIndex < queue.count {
+                playChunk(queue[nextIndex])
+                restorePausedOffset()
+            }
             else { handleExhausted() }
         }
     }

@@ -273,6 +273,12 @@ struct ContentView: View {
     /// SAME (sentence, word) pair returned the previous text's `AttributedString`
     /// (wrong text / highlight on the wrong ranges — finding M3).
     @State private var attrGeneration = 0
+    /// Sentence-level base (full text + base color + sentence background, no
+    /// word): rebuilt only when the SENTENCE changes. Word ticks copy it and
+    /// set one range — rebuilding 45k letters per word saturated the main
+    /// thread and the yellow lagged the voice (independent review).
+    @State private var attrBaseKey = ""
+    @State private var attrBase = AttributedString("")
     private func attributedPhrases(
         _ full: String, ranges: [(range: Range<String.Index>, index: Int)]
     ) -> AttributedString {
@@ -292,20 +298,41 @@ struct ContentView: View {
     private func buildAttributedPhrases(
         _ full: String, ranges: [(range: Range<String.Index>, index: Int)]
     ) -> AttributedString {
-        var attributed = AttributedString(full)
-        // AppKit scope on purpose: attributes in SwiftUI scope
-        // (`.backgroundColor`, `.foregroundColor`) have no counterpart in
-        // `NSAttributedString` — the panel discarded them and nothing highlighted.
-        // Without this the base text came out fixed black, illegible in dark mode.
-        attributed[attributed.startIndex..<attributed.endIndex].appKit.foregroundColor = NSColor.labelColor
         let target = controller.highlightIndex
-        guard target >= 0 else { return attributed }
-        guard let entry = ranges.first(where: { $0.index == target }),
-              let range = Range(entry.range, in: attributed)
+        // Sentence base memoized: full rebuild only when the sentence (or the
+        // document) changes; word ticks copy the base and set one range.
+        let sentenceKey = "\(attrGeneration)#\(target)"
+        let base: AttributedString
+        if sentenceKey == attrBaseKey, !attrBase.characters.isEmpty {
+            base = attrBase
+        } else {
+            var fresh = AttributedString(full)
+            // AppKit scope on purpose: attributes in SwiftUI scope
+            // (`.backgroundColor`, `.foregroundColor`) have no counterpart in
+            // `NSAttributedString` — the panel discarded them and nothing highlighted.
+            // Without this the base text came out fixed black, illegible in dark mode.
+            fresh[fresh.startIndex..<fresh.endIndex].appKit.foregroundColor = NSColor.labelColor
+            if target >= 0,
+               let entry = ranges.first(where: { $0.index == target }),
+               let range = Range(entry.range, in: fresh) {
+                // System color: follows the light/dark theme.
+                fresh[range].appKit.backgroundColor =
+                    NSColor.controlAccentColor.withAlphaComponent(0.35)
+            }
+            // Deferred like attrKey/attrValue: never mutate state during body.
+            let stored = fresh
+            DispatchQueue.main.async {
+                if self.attrBaseKey != sentenceKey {
+                    self.attrBaseKey = sentenceKey
+                    self.attrBase = stored
+                }
+            }
+            base = fresh
+        }
+        var attributed = base
+        guard target >= 0,
+              let entry = ranges.first(where: { $0.index == target })
         else { return attributed }
-        // System color: follows the light/dark theme.
-        attributed[range].appKit.backgroundColor =
-            NSColor.controlAccentColor.withAlphaComponent(0.35)
         // Word-by-word karaoke in online mode (text or PDF: the Text
         // panel uses the same streamer segments); Piper does not emit
         // word times.
@@ -318,10 +345,13 @@ struct ContentView: View {
         // spoken text expands years/abbreviations ("1998" becomes several
         // words), and direct indexing fell on the wrong word. Each word
         // is searched from the end of the previous one; a miss is skipped without
-        // shifting the following ones.
+        // shifting the following ones. A miss on an expansion keeps the LAST
+        // located word of THIS tick instead of erasing the yellow (same-tick
+        // state, no async race).
         let phraseText = String(full[entry.range])
         var cursor = phraseText.startIndex
         var wordLocal: Range<String.Index>?
+        var lastFound: Range<String.Index>?
         for (i, w) in seg.words.enumerated() {
             guard i <= controller.highlightWordIndex else { break }
             let needle = w.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -330,12 +360,14 @@ struct ContentView: View {
                       of: needle, options: .caseInsensitive,
                       range: cursor..<phraseText.endIndex) else { continue }
             if i == controller.highlightWordIndex { wordLocal = found }
+            else { lastFound = found }
             cursor = found.upperBound
         }
-        guard let local = wordLocal else { return attributed }
+        let local = wordLocal ?? lastFound
+        guard local != nil else { return attributed }
         // Converts the sentence's passage to the full string's base.
-        let distLow = phraseText.distance(from: phraseText.startIndex, to: local.lowerBound)
-        let distHigh = phraseText.distance(from: phraseText.startIndex, to: local.upperBound)
+        let distLow = phraseText.distance(from: phraseText.startIndex, to: local!.lowerBound)
+        let distHigh = phraseText.distance(from: phraseText.startIndex, to: local!.upperBound)
         let baseLow = full.index(entry.range.lowerBound, offsetBy: distLow)
         let baseHigh = full.index(entry.range.lowerBound, offsetBy: distHigh)
         if let wordRange = Range(baseLow..<baseHigh, in: attributed) {

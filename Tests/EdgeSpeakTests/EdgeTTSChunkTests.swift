@@ -11,7 +11,7 @@ import Testing
 struct EdgeTTSChunkTests {
     private func phrase(_ i: Int, length: Int, paragraphEnd: Bool = false) -> TextImport.Phrase {
         TextImport.Phrase(
-            index: i, text: String(repeating: "x", count: length),
+            index: i, text: String(repeating: "x", count: max(0, length - 1)) + ".",
             page: nil, rects: [], paragraphEnd: paragraphEnd)
     }
 
@@ -39,6 +39,37 @@ struct EdgeTTSChunkTests {
         let phrases = [phrase(0, length: 2000, paragraphEnd: true), phrase(1, length: 100)]
         let slices = EdgeTTS.buildChunks(phrases, maxChars: 350, firstChars: 350)
         #expect(slices.map { $0.map(\.index) } == [[0], [1]])
+    }
+
+    /// A sentence split across pages (passages without terminal punctuation)
+    /// never straddles two slices: the cut waits for the period.
+    @Test func sliceNeverCutsMidSentence() {
+        let a = TextImport.Phrase(index: 0, text: "The first half of the thought", page: 3, rects: [])
+        let b = TextImport.Phrase(index: 1, text: "ends on the next page.", page: 4, rects: [])
+        let c = TextImport.Phrase(index: 2, text: String(repeating: "y.", count: 200), page: 4, rects: [])
+        let slices = EdgeTTS.buildChunks([a, b, c], maxChars: 120, firstChars: 120)
+        #expect(slices[0].map(\.index) == [0, 1])
+    }
+
+    /// Runaway text without punctuation still splits (hard 2x ceiling).
+    @Test func runawayTextStillSplits() {
+        let a = TextImport.Phrase(index: 0, text: String(repeating: "z", count: 100), page: nil, rects: [])
+        let b = TextImport.Phrase(index: 1, text: String(repeating: "z", count: 100), page: nil, rects: [])
+        let c = TextImport.Phrase(index: 2, text: String(repeating: "z", count: 100), page: nil, rects: [])
+        let slices = EdgeTTS.buildChunks([a, b, c], maxChars: 120, firstChars: 120)
+        #expect(slices.count == 2)
+        #expect(slices[0].count == 2)
+    }
+
+    /// Leading-silence parser: the end of the silence starting at zero.
+    @Test func leadingSilenceParses() {
+        let err = """
+        [Parsed_silencedetect_0] silence_start: 0
+        [Parsed_silencedetect_0] silence_end: 0.189917 | silence_duration: 0.189917
+        [Parsed_silencedetect_0] silence_start: 1.142333
+        """
+        #expect(abs(EdgeTTS.parseLeadingSilence(err) - 0.189917) < 0.0001)
+        #expect(EdgeTTS.parseLeadingSilence("no silence here") == 0)
     }
 
     /// The trim asks ffmpeg for exactly the trailing silence.

@@ -67,6 +67,51 @@ struct ClickableTextView: NSViewRepresentable {
         return scroll
     }
 
+    /// Background runs (range + color) of a storage: equality means the
+    /// highlight already shows exactly this — repainting would only redo layout.
+    @MainActor
+    /// Background runs (range + canonical color): equality means the highlight
+    /// already shows exactly this. Colors compare by resolved sRGB components,
+    /// never by `description` (dynamic colors describe differently per appearance).
+    static func bgRuns(_ storage: NSAttributedString) -> [String] {
+        var out: [String] = []
+        let full = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.backgroundColor, in: full, options: []) { value, range, _ in
+            guard let color = value as? NSColor else { return }
+            let canon: String
+            if let c = color.usingColorSpace(.sRGB) {
+                canon = String(format: "%.3f,%.3f,%.3f,%.3f",
+                               c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent)
+            } else {
+                canon = String(describing: color)
+            }
+            out.append("\(range.location):\(range.length):\(canon)")
+        }
+        return out
+    }
+    /// storage (restoring base font/color there) and applies the desired
+    /// runs. Same characters on both sides by contract — the caller checks.
+    @MainActor
+    static func paintHighlight(storage: NSTextStorage, desired: NSAttributedString, pointSize: CGFloat) {
+        let baseFont = NSFont.systemFont(ofSize: pointSize)
+        let full = NSRange(location: 0, length: min(storage.length, desired.length))
+        guard full.length > 0 else { return }
+        storage.beginEditing()
+        storage.enumerateAttribute(.backgroundColor, in: full, options: []) { value, range, _ in
+            guard value != nil else { return }
+            storage.removeAttribute(.backgroundColor, range: range)
+            storage.addAttribute(.font, value: baseFont, range: range)
+            storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
+        }
+        desired.enumerateAttributes(in: full, options: []) { attrs, range, _ in
+            guard attrs[.backgroundColor] != nil else { return }
+            storage.addAttribute(.backgroundColor, value: attrs[.backgroundColor] as Any, range: range)
+            if let font = attrs[.font] { storage.addAttribute(.font, value: font, range: range) }
+            if let fg = attrs[.foregroundColor] { storage.addAttribute(.foregroundColor, value: fg, range: range) }
+        }
+        storage.endEditing()
+    }
+
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ClickReportingTextView else { return }
         // The click closure is reassigned on EVERY update: `makeNSView` runs only
@@ -78,11 +123,24 @@ struct ClickableTextView: NSViewRepresentable {
             onTap(index)
             textView.setSelectedRange(NSRange(location: min(index, (textView.string as NSString).length), length: 0))
         }
-        let current = NSAttributedString(attributed)
-        if let storage = textView.textStorage, !storage.isEqual(to: current) {
-            storage.setAttributedString(current)
-            textView.font = NSFont.systemFont(ofSize: pointSize)
-            textView.textContainer?.widthTracksTextView = true
+        // Highlight path: same characters → only attributes moved (sentence or
+        // word tick). A full storage swap per word re-laid the whole document
+        // and the yellow lagged; instead repaint only when the background runs
+        // differ (equality skips the redundant layout, never a new highlight —
+        // a click always changes the runs and repaints). New document → full
+        // swap as before.
+        let plain = String(attributed.characters)
+        if let storage = textView.textStorage, storage.string == plain {
+            let current = NSAttributedString(attributed)
+            guard Self.bgRuns(storage) != Self.bgRuns(current) else { return }
+            Self.paintHighlight(storage: storage, desired: current, pointSize: pointSize)
+        } else if let storage = textView.textStorage {
+            let current = NSAttributedString(attributed)
+            if !storage.isEqual(to: current) {
+                storage.setAttributedString(current)
+                textView.font = NSFont.systemFont(ofSize: pointSize)
+                textView.textContainer?.widthTracksTextView = true
+            }
         }
         // Teleprompter: scrolls to the sentence being read when it changes (not on every
         // word, to avoid jitter); with follow off, it does not touch

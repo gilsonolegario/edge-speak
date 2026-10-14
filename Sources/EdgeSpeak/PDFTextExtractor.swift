@@ -317,11 +317,15 @@ enum PDFTextExtractor {
         var currentLines: [Line] = []
         var previous: Line?
 
-        // Closes the current paragraph, taking only the boxes and words of its page.
+        // Closes the current paragraph. Line boxes stay single-page (geometry
+        // like rule zones compares tops within one page), but the WORDS span
+        // all pages: without the next page's words the tail of a sentence
+        // crossing the page break has no highlight boxes downstream
+        // (`passagesPerPage` already splits multi-page words per page).
         func flush() {
             let pageLines = currentLines.filter { $0.page == currentPage }
             let rects = pageLines.map { $0.box }
-            let words = pageLines.flatMap { line in
+            let words = currentLines.flatMap { line in
                 line.words.map { (text: $0.text, box: $0.box, page: line.page, sup: $0.sup) }
             }
             result.append((current, currentPage, rects, words))
