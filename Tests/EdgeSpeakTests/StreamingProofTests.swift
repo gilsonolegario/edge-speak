@@ -312,4 +312,44 @@ struct StreamingProofTests {
         #expect(player.currentChunkIndex == 0)
         #expect(player.elapsed == 0.4)
     }
+
+    /// A click on a sentence INSIDE the paused slice must re-arm the highlight
+    /// timer. `pause()` invalidates it; the click reuses the current player (no
+    /// `playChunk`), and `play()` early-returns because the player is already
+    /// playing — so before this fix the audio resumed but the highlight froze.
+    @Test func clickInsidePausedSliceReArmsHighlightTimer() {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EdgeSpeak-hlt-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func wav(_ nome: String) -> URL {
+            let url = dir.appendingPathComponent(nome)
+            var data = Data()
+            func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+            func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+            let amostras = 8000 // 1 s of silence, 8 kHz mono 16-bit
+            data.append(contentsOf: "RIFF".utf8); u32(36 + UInt32(amostras * 2)); data.append(contentsOf: "WAVE".utf8)
+            data.append(contentsOf: "fmt ".utf8); u32(16); u16(1); u16(1); u32(8000); u32(16000); u16(2); u16(16)
+            data.append(contentsOf: "data".utf8); u32(UInt32(amostras * 2))
+            data.append(Data(count: amostras * 2))
+            try? data.write(to: url)
+            return url
+        }
+        let player = StreamingPlayer()
+        // Two sentences in the SAME slice: the click lands on index 1 without
+        // changing slice, which is the path that skipped `playChunk`.
+        player.start(urls: [wav("h0.wav")], durations: [1], chunkSegments: [[
+            EdgeTTS.Segment(start: 0, duration: 0.4, text: "zero", index: 0, page: nil, rects: []),
+            EdgeTTS.Segment(start: 0.4, duration: 0.6, text: "one", index: 1, page: nil, rects: []),
+        ]])
+        #expect(player.isHighlightTimerRunning == true)
+        player.pause()
+        // Pause invalidates the timer: this is the precondition of the defect.
+        #expect(player.isHighlightTimerRunning == false)
+        #expect(player.jumpToSegment(1) == true)
+        // Audio resumed AND the timer is live again — before, it stayed dead and
+        // the yellow word froze at the clicked position.
+        #expect(player.isPlaying == true)
+        #expect(player.isHighlightTimerRunning == true)
+    }
 }

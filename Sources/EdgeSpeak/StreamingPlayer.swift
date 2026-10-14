@@ -102,6 +102,12 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     var isQueueExhausted: Bool { nextIndex >= queue.count }
 
+    /// Whether the karaoke/highlight tick is live. `pause()` invalidates it and
+    /// only `playChunk`/`gotoChunk`(resume branch) reinstall it — this accessor
+    /// lets the tests prove the reinstall instead of inferring it from a frozen
+    /// word.
+    var isHighlightTimerRunning: Bool { highlightTimer?.isValid == true }
+
     /// Starts playback with the first slice.
     ///
     /// The durations arrive READY from the synthesizer (background task, off the
