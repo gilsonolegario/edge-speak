@@ -65,6 +65,15 @@ struct ClickableTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ClickReportingTextView else { return }
+        // A closure de clique é reatribuída a CADA update: `makeNSView` só roda
+        // uma vez e capturava o `onTap` do primeiro `body`. Ao trocar de
+        // arquivo, a closure antiga mapeava o clique contra o texto anterior
+        // (achado B5). Reatribuir mantém `onTap` sempre o do documento corrente.
+        textView.onCharacterTap = { [weak textView] index in
+            guard index >= 0, let textView else { return }
+            onTap(index)
+            textView.setSelectedRange(NSRange(location: min(index, (textView.string as NSString).length), length: 0))
+        }
         let current = NSAttributedString(attributed)
         if let storage = textView.textStorage, !storage.isEqual(to: current) {
             storage.setAttributedString(current)

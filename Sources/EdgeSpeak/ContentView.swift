@@ -94,6 +94,8 @@ struct ContentView: View {
                     // a parada acima salvou a posição do documento anterior.
                     currentDocumentID = url.absoluteString
                     speech.documentIDForPosition = url.absoluteString
+                    // Texto trocado: invalida o cache de atributos (M3).
+                    attrGeneration += 1
                     speech.setStatusKey(
                         "status.fileLoaded",
                         args: [url.lastPathComponent, r.filtrado.count],
@@ -266,13 +268,19 @@ struct ContentView: View {
     /// zero em cada um saturava a main. Fora da leitura calcula direto.
     @State private var attrKey = ""
     @State private var attrValue = AttributedString("")
+    /// Identidade do texto exibido (documento + modo integral/filtrado). Entra
+    /// na chave do cache de atributos: sem ela, trocar de arquivo ou de modo
+    /// com o MESMO par (frase, palavra) devolvia o `AttributedString` do texto
+    /// anterior (texto errado / destaque nos ranges errados — achado M3).
+    @State private var attrGeneration = 0
     private func attributedPhrases(
         _ full: String, ranges: [(range: Range<String.Index>, index: Int)]
     ) -> AttributedString {
         guard isReading || controller.isBusy else {
             return buildAttributedPhrases(full, ranges: ranges)
         }
-        let key = "\(controller.highlightIndex)#\(controller.highlightWordIndex)"
+        let key = "\(attrGeneration)#\(controller.highlightIndex)#"
+            + "\(controller.highlightWordIndex)"
         if key == attrKey { return attrValue }
         let value = buildAttributedPhrases(full, ranges: ranges)
         DispatchQueue.main.async {
@@ -624,6 +632,9 @@ struct ContentView: View {
     /// modo novo. Não há laço: nem o descarte nem o play mudam `integralMode`.
     private func handleIntegralModeChange() {
         let active = isReading || controller.isBusy
+        // Lista ativa muda (integral↔filtrado): invalida o cache de atributos
+        // antes do play, para o destaque não sair sobre o texto do modo antigo.
+        attrGeneration += 1
         controller.discardTranscription()
         if active {
             controller.play(phrases: playList(), voice: voice, rate: rate, lêNotas: lêNotas)
