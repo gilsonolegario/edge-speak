@@ -390,4 +390,17 @@ struct ReadAloudFilterTests {
         // Colado curto é sigla, não nota: fica como está.
         #expect(fala("o mp3 toca", voz: pt) == "o mp3 toca")
     }
+
+    // MARK: - Linha de fórmula não come prosa (regressão N4)
+
+    @Test func formulaNaoComeProsaComSimbolo() {
+        // A regra que apaga linha de fórmula só pode morder linha sem
+        // minúscula ou muito curta; prosa longa com símbolo no meio fica
+        // (regressão: a nota 4 sumia do modo filtrado, medido 2026-10-13).
+        let prosa = "The enlarged Ramsey sentence RHB = ∃X [H(X) ∧B(X)] is now "
+            + "false, since its witness would have to contain a alone."
+        #expect(ReadAloudFilter.clean(prosa, isPDF: true).contains("witness"))
+        // Linha que é só fórmula continua fora.
+        #expect(!ReadAloudFilter.clean("∃X φ(X)", isPDF: true).contains("∃"))
+    }
 }

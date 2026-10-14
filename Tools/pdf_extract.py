@@ -86,10 +86,12 @@ def _e_palavra(s):
 
 def _junta_fim(t_ult, t_pri):
     """Um texto só juntando fim de linha + início da seguinte, ou None.
-    Elisão curta ("l’", "d’") cola sempre; hífen final consulta o
-    dicionário (quebra some, composto mantém); sem palavra no dicionário,
-    minúscula cola e maiúscula mantém o hífen. Universal: nada aqui cita
-    PDF, página ou artigo específico.
+    Elisão curta ("l’", "d’") cola sempre. Hífen final, nesta ordem:
+    1. o próprio documento: a colagem ocorre inteira adiante ("enlarged")
+       ou a forma hifenizada ocorre ("wrinkled-seed") — vale para qualquer
+       idioma, sem dicionário externo (ideia do dehyphenate de ~breadbox);
+    2. o dicionário do sistema (inglês): quebra some, composto mantém;
+    3. sem palavra conhecida: minúscula cola, maiúscula mantém o hífen.
     """
     if not t_ult or not t_pri:
         return None
@@ -99,6 +101,11 @@ def _junta_fim(t_ult, t_pri):
     if len(t_ult) >= 2 and t_ult.endswith("-"):
         base = t_ult[:-1]
         colado = base + t_pri
+        baixo = colado.lower()
+        if baixo in _INTEIRAS:
+            return colado
+        if (t_ult + t_pri).lower() in _HIFENIZADAS:
+            return t_ult + t_pri
         if _e_palavra(colado):
             return colado
         if "-" in t_pri:
@@ -107,6 +114,12 @@ def _junta_fim(t_ult, t_pri):
             return colado
         return t_ult + t_pri
     return None
+
+
+# Evidência interna do documento (pré-scan em main): palavras inteiras
+# (minúsculas, >=4 letras) e formas com hífen. Antes do dicionário.
+_INTEIRAS = frozenset()
+_HIFENIZADAS = frozenset()
 
 
 def _inicia_com_nota(texto):
@@ -158,6 +171,23 @@ def main() -> int:
         return 3
 
     pages = []
+    # Pré-scan do documento inteiro (só palavras, ~0,1 s): evidência interna
+    # para a junção de hífen — a colagem que ocorre inteira adiante ou a
+    # forma hifenizada que ocorre valem para qualquer idioma, antes do
+    # dicionário do sistema (que só sabe inglês).
+    global _INTEIRAS, _HIFENIZADAS
+    inteiras, hifenizadas = set(), set()
+    for page in doc:
+        for w in page.get_text("words"):
+            txt = (w[4] or "").strip().replace("­", "")
+            if not txt:
+                continue
+            baixo = txt.lower()
+            if "-" in txt and len(txt) > 3:
+                hifenizadas.add(baixo)
+            if txt.isalpha() and len(txt) >= 4:
+                inteiras.add(baixo)
+    _INTEIRAS, _HIFENIZADAS = frozenset(inteiras), frozenset(hifenizadas)
     for index, page in enumerate(doc):
         h = page.rect.height
         W = page.rect.width
@@ -248,9 +278,14 @@ def main() -> int:
             c0 = _caixa(partes)
             c1 = _caixa(sorted(grupos[proxima], key=lambda p: p["x0"]))
             # Coords PDFKit (origem embaixo): vão = fundo da atual menos
-            # topo da próxima; vale 0..1,5 linha quando é continuação.
+            # topo da próxima; vale 0..1,5 linha quando é continuação. Uma
+            # palavra de caixa anômala (topo alto demais) estoura o vão sem
+            # quebrar o passo fundo-a-fundo — que vale 0,5..1,7 linha. Ou um
+            # ou outro libera; a sobreposição horizontal segue exigida.
             vao = c0[1] - c1[3]
-            if not (0 <= vao <= 1.5 * mediana_alt):
+            passo = c0[1] - c1[1]
+            if not (0 <= vao <= 1.5 * mediana_alt
+                    or 0.5 * mediana_alt <= passo <= 1.7 * mediana_alt):
                 continue
             sobre = min(c0[2], c1[2]) - max(c0[0], c1[0])
             if sobre < 0.5 * min(c0[2] - c0[0], c1[2] - c1[0]):

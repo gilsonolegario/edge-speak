@@ -77,10 +77,14 @@ enum ReadAloudFilter {
         (#"(?i)\(\s*(?:[A-ZÀ-Þ][\p{L}'’.\-]+(?:[ \t]*(?:,|and|&|e)[ \t]*[A-ZÀ-Þ][\p{L}'’.\-]+|[ \t]+et[ \t]+al\.?)*,?[ \t]*)?\d{4}[a-z]?(?:[ \t]*,[ \t]*[\d–—\-]+)?\s*\)"#, ""),
         // Citação só de página entre parênteses: "(259)".
         (#"\(\s*\d{1,3}\s*\)"#, ""),
-        // Linha de fórmula: contém conectivo lógico/matemático. O `(?m)^.*$`
-        // remove a linha inteira, porque uma fórmula sozinha não tem leitura
-        // possível — a voz tenta soletrar os símbolos.
-        (#"(?m)^.*[∀∃∧∨¬→↔⊨⊢≡≢⊂⊆∈∑∫∂±×÷√≤≥∞].*$"#, ""),
+        // Linha de fórmula: contém conectivo lógico/matemático E (não tem
+        // nenhuma minúscula OU tem até 60 caracteres). A segunda condição é
+        // o que impede comer prosa que só menciona símbolos ("RHB = ∃X..."
+        // no meio de uma frase de 90+ letras, medido em 2026-10-13: a regra
+        // antiga apagava o trecho inteiro da nota 4 no modo filtrado). Linha
+        // curta de prosa com símbolo ("see ∃X here") ainda cai — raro e
+        // documentado; o status quo apagava tudo que tivesse símbolo.
+        (#"(?m)^[^a-zà-ÿ\n]*[∀∃∧∨¬→↔⊨⊢≡≢⊂⊆∈∑∫∂±×÷√≤≥∞][^a-zà-ÿ\n]*$|(?m)^(?=.{0,60}$).*[∀∃∧∨¬→↔⊨⊢≡≢⊂⊆∈∑∫∂±×÷√≤≥∞].*$"#, ""),
         // Linha curta sem nenhuma minúscula: sobra de fórmula ("HB", "H I ).",
         // "T(t,o)"). Uma frase de verdade sempre tem alguma minúscula.
         (#"(?m)^[^a-zà-ÿ\n]{1,16}$"#, ""),
