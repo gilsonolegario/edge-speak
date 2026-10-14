@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Janela de Ajustes do EdgeSpeak (item padrão do menu, ⌘,).
 ///
@@ -98,6 +99,8 @@ struct SettingsView: View {
     }
 
     @State private var tamanhoCache: String? = nil
+    /// Relatório de diagnóstico (versões, ambiente, cache, último status).
+    @State private var diagnosticoTexto: String = ""
 
     private var advancedTab: some View {
         Form {
@@ -111,10 +114,28 @@ struct SettingsView: View {
                 }
             }
             .help(L.get("help.clearCacheHelp", locale: idioma))
+
+            Divider()
+            // Diagnóstico copiável: o texto aparece selecionável e há um botão
+            // que o põe na área de transferência (ação do usuário, não automática).
+            Button(L.get("ui.copyDiagnostics", locale: idioma)) {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(diagnosticoTexto, forType: .string)
+            }
+            .disabled(diagnosticoTexto.isEmpty)
+            Text(diagnosticoTexto)
+                .font(.footnote.monospaced())
+                .textSelection(.enabled)
+                .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
         .padding()
-        .task { await recarregaCache() }
+        .task {
+            await recarregaCache()
+            let texto = await Task.detached(priority: .utility) { Diagnostics.texto() }.value
+            await MainActor.run { diagnosticoTexto = texto }
+        }
     }
 
     /// Tamanho do cache fora da main (varredura em disco).

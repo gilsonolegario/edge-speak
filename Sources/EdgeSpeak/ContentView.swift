@@ -39,6 +39,13 @@ struct ContentView: View {
     /// descartado em vez de sobrescrever o documento novo.
     @State private var loadGeneration = 0
 
+    /// Temporizador de parada: minutos escolhidos no menu (0 = desligado).
+    /// Não é persistido — um temporizador não deve sobreviver ao relançamento.
+    @State private var sleepMinutes: Int = 0
+    /// Instante em que a leitura para; `nil` quando o temporizador está off.
+    /// Muda a cada escolha e dispara o countdown (`task id:sleepDeadline`).
+    @State private var sleepDeadline: Date?
+
     /// Tamanho da fonte do texto, em pontos.
     ///
     /// Persistido porque é uma preferência de leitura: quem precisa de fonte
@@ -460,6 +467,30 @@ struct ContentView: View {
             // volta a acompanhar.
             .onChange(of: controller.highlightIndex) { _, _ in scrollHold = false }
             .onChange(of: appLanguageRaw) { _, _ in controller.refreshLocale(idioma) }
+            // Escolha no menu do temporizador: 0 desliga (prazo nil); N arma o
+            // prazo em N minutos. O disparo fica no `task(id:)` abaixo.
+            .onChange(of: sleepMinutes) { _, novo in
+                if novo > 0 {
+                    sleepDeadline = Date().addingTimeInterval(Double(novo) * 60)
+                    controller.setStatusKey("status.sleepSet", args: [novo], locale: idioma)
+                } else {
+                    sleepDeadline = nil
+                }
+            }
+            // Countdown cancelável: o `id` reinicia a tarefa a cada novo prazo
+            // e cancela a anterior, sem Timer nem fuga de referência. Ao
+            // chegar o prazo, para a leitura e zera o menu.
+            .task(id: sleepDeadline) {
+                guard let alvo = sleepDeadline else { return }
+                let restante = alvo.timeIntervalSinceNow
+                if restante > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(restante * 1_000_000_000))
+                }
+                guard !Task.isCancelled, sleepDeadline == alvo else { return }
+                sleepDeadline = nil
+                sleepMinutes = 0
+                controller.stopPlayback()
+            }
     }
 
     // MARK: - Área de texto
@@ -795,6 +826,21 @@ struct ContentView: View {
             }
             .disabled(!controller.hasTranscription)
             .help(L.get("help.redoSynthesis", locale: idioma))
+
+            Divider()
+            // Temporizador de parada: desliga sozinho ao fim do prazo. Some
+            // como submenu porque o menu Opções já reúne as ações do momento.
+            Menu {
+                Button(L.get("ui.sleepOff", locale: idioma)) { sleepMinutes = 0 }
+                Divider()
+                ForEach([5, 15, 30, 60], id: \.self) { minuto in
+                    Button(L.get("ui.sleepMinutes", locale: idioma, args: minuto)) {
+                        sleepMinutes = minuto
+                    }
+                }
+            } label: {
+                Label(L.get("ui.sleepTimer", locale: idioma), systemImage: "moon.zzz")
+            }
 
             Divider()
             // SettingsLink abre a cena `Settings` do EdgeSpeakApp; é o que

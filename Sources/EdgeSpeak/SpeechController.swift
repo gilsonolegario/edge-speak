@@ -703,6 +703,7 @@ final class SpeechController: ObservableObject {
         statusKey = chave
         statusArgs = args.map { String(describing: $0) }
         status = L.resolve(chave, locale: locale ?? idiomaAtual, args: args)
+        DiagStatus.registra(status)
     }
 
     /// Progresso vivo dos motores (texto cru, fora do catálogo): limpa a
@@ -711,6 +712,7 @@ final class SpeechController: ObservableObject {
         statusKey = nil
         statusArgs = []
         status = msg
+        DiagStatus.registra(msg)
     }
 
     /// Limpa o cache em disco preservando a leitura corrente (botão da aba
