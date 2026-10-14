@@ -88,7 +88,18 @@ das raias 1–2); sem pin no edge-tts (7.3.1 compatível, fail-closed).
   Ajustes em 3 abas; descarte de transcrição.
 - [NO AR] Play retoma com síntese em curso; cache fora da main; pulo morre
   no erro; amarelo unificado painel/PDF; toggle sem PDF; arrasto não pula.
-- [ABERTO] 15 s iniciais sem destaque (causa não isolada).
+- [CÓDIGO] Repetição da primeira leitura: o salto (clique ou retomada por
+  documento) durante o pré-buffer era desfeito no release, que tocava a
+  fatia 0 do zero — a frase já ouvida voltava. `gotoChunk` consume o hold
+  (`startPending`/`isBuffering`) e reinstala o timer do destaque; regressão em
+  `clickDuringBufferKeepsOffsetOnRelease`.
+- [CÓDIGO] 15 s iniciais sem destaque (causa isolada): o release do
+  pré-buffer só era conferido em `enqueue`, ANTES de medir a duração, e a
+  sonda (`finishProbe`) nunca destravava — a primeira fala esperava a fatia
+  seguinte ou o fim da síntese inteira (abertura sem som e sem destaque).
+  `releasePrebufferIfReady` chamado por `enqueue`, `finishProbe` e
+  `markSynthesisComplete`; `playChunk` posiciona o destaque na hora. Regressão
+  `prebufferReleasesWhenProbeLands` (falhava: `isBuffering` preso). Suíte 166/24 verde.
 - [CÓDIGO] Hífen de fim de linha + virada de página no destaque
   (pesquisa em `docs/pesquisas/pymupdf-pesquisa.md`; 77→2 tokens partidos
   no artigo; frase parte por página sem atravessar caixa). Commit `23e9f27`.

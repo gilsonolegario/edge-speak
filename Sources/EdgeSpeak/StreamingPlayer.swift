@@ -147,14 +147,7 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         // measured durations). A click-jump during the buffer keeps its
         // offset: releasing from zero would replay the slice's first
         // sentence (heard twice).
-        if startPending, startReady {
-            startPending = false
-            isBuffering = false
-            if nextIndex < queue.count {
-                playChunk(queue[nextIndex])
-                restorePausedOffset()
-            }
-        }
+        releasePrebufferIfReady()
         // Audio arrived with the queue emptied: resumes where it stopped.
         if isStarved, nextIndex < queue.count {
             playChunk(queue[nextIndex])
@@ -204,6 +197,13 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard duration > 0 else { return }
         chunkDurations[index] = duration
         recomputeOffsets()
+        // The probe is what completes the map the pre-buffer waits for: the
+        // slice arrives before its duration (measured in the background), so
+        // the release check in `enqueue` always saw a zeroed duration. Without
+        // this call the held start waited for the NEXT slice — or, in a short
+        // document, for the whole synthesis to close (the reading opened with
+        // seconds of silence and no highlight).
+        releasePrebufferIfReady()
     }
 
     private func recomputeOffsets() {
@@ -267,7 +267,6 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// state machine.
     private func gotoChunk(_ chunk: Int, within: TimeInterval) {
         guard chunk < queue.count else { return }
-        Self.navLog("goto chunk=\(chunk) within=\(String(format: "%.2f", within)) next=\(nextIndex) hasCurrent=\(current != nil)")
         // `isFinished` counts as "play": dragging backwards after the
         // audio ended must resume playing, not stay still.
         // `isStarved` too: an emptied queue with synthesis in progress is a wait,
@@ -282,20 +281,30 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             nextIndex = chunk
             playChunk(queue[chunk])
         }
-        current?.currentTime = min(within, current?.duration ?? within)
+        if isPaused {
+            current?.stop()
+        }
+        // A jump positions real audio: the pre-buffer hold is spent. Without
+        // this, the release in `enqueue`/`markSynthesisComplete` fires on top
+        // of a jump made during buffering and replays the first sentence.
+        startPending = false
+        isBuffering = false
+        let targetTime = min(within, current?.duration ?? within)
+        current?.currentTime = targetTime
         elapsed = (chunk < chunkOffsets.count ? chunkOffsets[chunk] : knownDuration)
-            + (current?.currentTime ?? within)
+            + targetTime
         isFinished = false
         if wasPlaying, current != nil {
             current?.play()
             isPlaying = true
             isPaused = false
+            installHighlightTimer()
         } else {
             isPlaying = false
             isPaused = current != nil
-            pausedAt = current?.currentTime ?? 0
+            pausedAt = targetTime
         }
-        updateHighlight(at: current?.currentTime ?? 0)
+        updateHighlight(at: targetTime)
     }
 
     /// Jumps to the start of the sentence with global index `index`, going STRAIGHT to the
@@ -325,7 +334,6 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @discardableResult
     func jumpToSegment(_ index: Int) -> Bool {
         guard seek(toSegment: index) else { return false }
-        Self.navLog("jump idx=\(index) chunk=\(nextIndex)")
         play()
         return true
     }
@@ -408,6 +416,21 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         installHighlightTimer()
     }
 
+    /// Releases the held start as soon as the map is ready (enough slices AND
+    /// their durations measured). Called by `enqueue`, by `finishProbe` — the
+    /// probe is usually what completes the map, and forgetting it here held the
+    /// first sound until the NEXT slice arrived (or the whole synthesis closed):
+    /// the opening seconds ran with no audio and no highlight.
+    private func releasePrebufferIfReady() {
+        guard startPending, startReady else { return }
+        startPending = false
+        isBuffering = false
+        if nextIndex < queue.count {
+            playChunk(queue[nextIndex])
+            restorePausedOffset()
+        }
+    }
+
     /// Closes the queue: when the last slice ends, the reading is over.
     /// A held-back start releases at once with whatever is buffered.
     func markSynthesisComplete() {
@@ -424,7 +447,6 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func playChunk(_ url: URL) {
-        Self.navLog("playChunk idx=\(nextIndex)")
         guard nextIndex < queue.count else {
             handleExhausted()
             return
@@ -448,6 +470,9 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             isFinished = false
             isStarved = false
             installHighlightTimer()
+            // Positions the highlight at once, without waiting the first 10 Hz
+            // tick: the sound and the highlight start together.
+            updateHighlight(at: player.currentTime)
         } catch {
             // A corrupted slice cannot drop the whole reading: skip
             // to the NEXT in the queue. Before, it repeated the SAME url (`playChunk(url)`)
@@ -494,43 +519,6 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var nudgeSince = 0.0
     private var nudgeSeg = -1
     private var nudgedNow = false
-    /// TEMP diagnostic: navigation trace (jump/seek/play-chunk) into the lag
-    /// log. Removed after the repeat investigation.
-    static func navLog(_ s: String) {
-        let line = String(format: "%.3f NAV %@\n", Date().timeIntervalSince1970, s)
-        guard let data = line.data(using: .utf8) else { return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edgespeak-lag.log")
-        if FileManager.default.fileExists(atPath: url.path),
-           let h = try? FileHandle(forWritingTo: url) {
-            try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close()
-        } else {
-            try? data.write(to: url)
-        }
-    }
-
-    /// TEMP diagnostic: 1 Hz + on-change trace of audio time vs shown
-    /// segment/word. Removed after the lag investigation.
-    private var lagProbeCount = 0
-    private var lagProbeLast = ""
-    private func lagProbe(audioTime: Double, chunk: Int, seg: Int, word: Int) {
-        lagProbeCount += 1
-        let key = "\(seg)#\(word)"
-        let changed = key != lagProbeLast
-        lagProbeLast = key
-        guard changed || lagProbeCount % 10 == 0 else { return }
-        let line = String(format: "%.3f %.3f %d %d %d %@\n",
-                          Date().timeIntervalSince1970, audioTime, chunk, seg, word,
-                          nudgedNow ? "nudge" : (changed ? "chg" : "hb"))
-        guard let data = line.data(using: .utf8) else { return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edgespeak-lag.log")
-        if FileManager.default.fileExists(atPath: url.path),
-           let h = try? FileHandle(forWritingTo: url) {
-            try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close()
-        } else {
-            try? data.write(to: url)
-        }
-    }
-
     private func updateHighlight(at seconds: Double) {
         elapsed = nextIndex < chunkOffsets.count
             ? chunkOffsets[nextIndex] + seconds
@@ -572,8 +560,6 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 nudgeWord = word
                 nudgeSince = seconds
             }
-            let global = nextIndex < chunkOffsets.count ? chunkOffsets[nextIndex] + seconds : seconds
-            lagProbe(audioTime: global, chunk: nextIndex, seg: seg.index, word: word)
             if seg.text != currentSegmentText { currentSegmentText = seg.text }
             if seg.index != currentSegmentIndex { currentSegmentIndex = seg.index }
             if seg.page != currentSegmentPage { currentSegmentPage = seg.page }

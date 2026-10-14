@@ -1337,10 +1337,22 @@ What each suite locks:
 
 ## 7) Known limits and open items
 
-- **The first seconds of audio without a highlight in the PDF:**
-  reproducible (the slice plays before the highlight settles); the
-  **cause is still not isolated** — there is no confirmed hypothesis.
-  Open.
+- **The first seconds without a highlight in the PDF: RESOLVED** (was: the
+  slice played before the highlight settled; cause not isolated). The real
+  cause was the pre-buffer release: it was checked in `enqueue` *before* the
+  duration probe ran, and the probe (`finishProbe`) never released a held
+  start — so the first sound waited for the NEXT slice, or for the whole
+  synthesis to close in a short document. The opening ran with no audio and,
+  therefore, no highlight. Fixed by `releasePrebufferIfReady()` (called by
+  `enqueue`, `finishProbe`, `markSynthesisComplete`); `playChunk` now also
+  positions the highlight immediately instead of waiting the first 10 Hz tick.
+  Regression: `StreamingProofTests.prebufferReleasesWhenProbeLands`.
+- **Repetition of the first sentence: RESOLVED.** A jump (click or
+  resume-by-document) made during the pre-buffer was undone by the release,
+  which played slice 0 from zero — the sentence was heard twice. `gotoChunk`
+  now spends the hold (`startPending`/`isBuffering`) and reinstalls the
+  highlight timer, so the release cannot fire on top of the jump. Regression:
+  `StreamingProofTests.clickDuringBufferKeepsOffsetOnRelease`.
 - **Footnote bodies in PDFs whose text layer does not carry them**
   (like the test article): the marker↔body pipeline is ready and
   covered by `FootnoteTests` with synthetic lists, but it depends on

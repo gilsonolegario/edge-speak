@@ -192,6 +192,53 @@ struct StreamingProofTests {
         #expect(player.currentChunkIndex == 0)
     }
 
+    /// Real streaming start (durations NOT passed: the background probes measure
+    /// them): the held start releases as soon as the probe completes the map.
+    /// Before, `enqueue` checked readiness BEFORE launching the probe, and the
+    /// probe itself never released — so the first sound waited for the NEXT
+    /// slice (or the whole synthesis): the opening seconds ran with no audio
+    /// and no highlight (owner: "the first seconds without a highlight").
+    @Test func prebufferReleasesWhenProbeLands() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EdgeSpeak-prebuf-probe-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func wav(_ nome: String) -> URL {
+            let url = dir.appendingPathComponent(nome)
+            var data = Data()
+            func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+            func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+            let amostras = 16000
+            data.append(contentsOf: "RIFF".utf8); u32(36 + UInt32(amostras * 2)); data.append(contentsOf: "WAVE".utf8)
+            data.append(contentsOf: "fmt ".utf8); u32(16); u16(1); u16(1); u32(8000); u32(16000); u16(2); u16(16)
+            data.append(contentsOf: "data".utf8); u32(UInt32(amostras * 2))
+            data.append(Data(count: amostras * 2))
+            try? data.write(to: url)
+            return url
+        }
+        func segs(_ text: String, _ index: Int) -> [EdgeTTS.Segment] {
+            [EdgeTTS.Segment(start: 0, duration: 1, text: text, index: index, page: nil, rects: [])]
+        }
+        let player = StreamingPlayer()
+        // Real condition: no durations passed — the probes measure them.
+        player.start(urls: [wav("c0.wav")], chunkSegments: [segs("zero", 0)],
+                     minStart: StreamingPlayer.minStartChunks)
+        #expect(player.isBuffering == true)
+        player.enqueue(urls: [wav("c1.wav")], chunkSegments: [segs("one", 1)])
+        player.enqueue(urls: [wav("c2.wav")], chunkSegments: [segs("two", 2)])
+        // Let the background probes land (they need the main actor free).
+        var spun = 0
+        while spun < 60, player.isBuffering {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            spun += 1
+        }
+        // The probe itself releases: before, this stayed buffering until a 4th
+        // slice arrived (or the whole synthesis closed), and the opening ran
+        // with no sound and no highlight.
+        #expect(player.isBuffering == false)
+        #expect(player.knownDuration > 0)
+    }
+
     /// A finished synthesis releases the held start with a single slice.
     @Test func finishedSynthesisReleasesHeldStart() {
         let dir = FileManager.default.temporaryDirectory
