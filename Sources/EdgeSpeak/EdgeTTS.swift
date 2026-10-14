@@ -238,7 +238,8 @@ struct Rate: Equatable, Hashable, Sendable {
     static func buildChunks(
         _ phrases: [TextImport.Phrase],
         maxChars: Int,
-        firstChars: Int = 450
+        firstChars: Int = 450,
+        leadChunks: Int = 1
     ) -> [[TextImport.Phrase]] {
         /// A cut is only clean after terminal punctuation (trailing closers
         /// don't count as continuation).
@@ -250,12 +251,15 @@ struct Rate: Equatable, Hashable, Sendable {
         var out: [[TextImport.Phrase]] = []
         var current: [TextImport.Phrase] = []
         var count = 0
-        var first = true
         var i = 0
         while i < phrases.count {
             let phrase = phrases[i]
             let size = phrase.text.count
-            let cap = first ? firstChars : maxChars
+            // Lead slices stay short: the player only starts after
+            // `minStartChunks` slices arrive measured, so the gate fills in
+            // ~2 s instead of waiting on a huge second slice. Default 1
+            // preserves the historical single short head.
+            let cap = out.count < leadChunks ? firstChars : maxChars
             let add = (current.isEmpty ? 0 : 1) + size
             if !current.isEmpty, count + add > cap {
                 if let cut = current.lastIndex(where: { $0.paragraphEnd }),
@@ -268,7 +272,6 @@ struct Rate: Equatable, Hashable, Sendable {
                     current = rest
                     count = rest.reduce(0) { $0 + $1.text.count }
                         + max(0, rest.count - 1)
-                    first = false
                     continue
                 }
                 // Mid-sentence (page-split passages, runaway prose): carries on
@@ -283,7 +286,6 @@ struct Rate: Equatable, Hashable, Sendable {
                 out.append(current)
                 current = []
                 count = 0
-                first = false
                 continue
             }
             if !current.isEmpty { count += 1 }
@@ -376,7 +378,8 @@ struct Rate: Equatable, Hashable, Sendable {
         progress: @escaping (String) -> Void,
         onChunk: @escaping (ChunkDelivery) -> Void
     ) async throws -> Result {
-        let groups = buildChunks(phrases, maxChars: maxChars)
+        let groups = buildChunks(
+            phrases, maxChars: maxChars, leadChunks: StreamingPlayer.minStartChunks)
         guard !groups.isEmpty else {
             throw makeError(key: "error.nothingToSynthesize")
         }

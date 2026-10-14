@@ -74,7 +74,9 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// Slices buffered before the first sound (owner choice: wait longer at
     /// the start, then never stall). `start` with fewer slices holds them and
     /// `enqueue` releases at the threshold; a finished synthesis releases at once.
-    static let minStartChunks = 3
+    /// `nonisolated` so the chunker (off the actor) can size the short lead
+    /// to this same gate without a hop.
+    nonisolated static let minStartChunks = 3
     @Published private(set) var isBuffering = false
     private var startPending = false
 
@@ -553,10 +555,16 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             let seg = local[found]
             var word = wordIndex(in: seg.words, at: seconds)
             // Timed word stalled while the sentence continues: creep forward
-            // instead of freezing (expansions exhaust the timed words).
+            // instead of freezing (expansions exhaust the timed words) — but
+            // only once the word's own measured duration is over. A year or
+            // number arrives as ONE timed word lasting over a second ("1950"
+            // ≈ 1.4 s, spoken "mil novecentos e cinquenta"); nudging mid-word
+            // jumped ahead and the next tick snapped back, so the yellow
+            // flickered back and forth on citations.
             nudgedNow = false
             if word == nudgeWord, seg.index == nudgeSeg, word >= 0, word + 1 < seg.words.count,
-               seconds - nudgeSince >= 0.9 {
+               seconds - nudgeSince >= 0.9,
+               seg.words[word].start + seg.words[word].duration <= seconds {
                 word += 1
                 nudgeWord = word
                 nudgeSince = seconds

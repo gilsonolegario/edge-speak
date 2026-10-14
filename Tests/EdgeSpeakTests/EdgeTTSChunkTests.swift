@@ -101,4 +101,14 @@ struct EdgeTTSChunkTests {
             slice: 3, reason: "unreadable timings in chunk-0003.json", locale: .en)
         #expect(SpeechController.parseProgress(warning) == nil)
     }
+
+    /// Lead slices stay short: with `leadChunks` covering the player's start
+    /// gate, the first sound (and the yellow) no longer waits on a huge
+    /// second slice; coverage and order are unchanged.
+    @Test func leadSlicesStayShort() {
+        let phrases = (0..<9).map { phrase($0, length: 200) }
+        let slices = EdgeTTS.buildChunks(phrases, maxChars: 1800, leadChunks: 3)
+        #expect(slices.map { $0.map(\.index) } == [[0, 1], [2, 3], [4, 5], [6, 7, 8]])
+        #expect(slices.flatMap { $0.map(\.index) } == Array(0..<9))
+    }
 }
