@@ -206,10 +206,17 @@ struct ContentView: View {
     /// evaluation cycles — the yellow cannot restart from scratch on every tick.
     @State private var wordAligner = WordAligner()
 
-    /// Box of the word being read in the PDF (geometric karaoke): only with PDF,
-    /// only with the online voice (Piper emits no word times) and only with the
-    /// box matched by text — never by index.
-    private var currentWordRect: CGRect? {
+    /// Box of the word being read in the PDF (geometric karaoke) WITH the page
+    /// that owns it: only with PDF, only with the online voice (Piper emits no
+    /// word times) and only with the box matched by text — never by index.
+    ///
+    /// The page travels with the box. A sentence that crosses a page break
+    /// keeps the page where it starts, while its continuation words are boxes
+    /// of the NEXT page (measured on Neutrality_v82: 11 sentences, 628 words,
+    /// all at y=705 of the following page). The yellow annotation was added to
+    /// the sentence's page, so those words were painted at the bottom of the
+    /// previous one — on top of unrelated words, and only there.
+    private var currentWordBox: (page: Int?, rect: CGRect)? {
         guard pdfDocument != nil,
               !PiperTTS.isOfflineVoice(controller.voiceInUse),
               controller.highlightWordIndex >= 0,
@@ -220,12 +227,17 @@ struct ContentView: View {
               !seg.words.isEmpty,
               controller.highlightWordIndex < seg.words.count
         else { return nil }
-        return wordAligner.box(
+        guard let box = wordAligner.boxEntry(
             sentence: controller.highlightIndex,
             target: controller.highlightWordIndex,
             spokenWords: seg.words.map(\.text),
             pdf: phrase.words)
+        else { return nil }
+        return (page: box.page, rect: box.rect)
     }
+
+    /// Just the rectangle, for the callers that only need the geometry.
+    private var currentWordRect: CGRect? { currentWordBox?.rect }
 
     private var clickablePhrases: some View {
         let model = displayModel()
@@ -517,7 +529,9 @@ struct ContentView: View {
                         rects: (isReading || controller.isBusy)
                             ? (currentPhrase?.rects ?? []) : [],
                         wordRect: (isReading || controller.isBusy)
-                            ? currentWordRect : nil,
+                            ? currentWordBox?.rect : nil,
+                        wordPage: (isReading || controller.isBusy)
+                            ? currentWordBox?.page : nil,
                         follow: followReading,
                         scrollHold: scrollHold,
                         revealToken: revealToken,
