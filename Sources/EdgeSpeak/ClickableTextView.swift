@@ -149,6 +149,12 @@ struct ClickableTextView: NSViewRepresentable {
     /// Locates the spoken word `target` inside the sentence (UTF-16 offsets in
     /// `full`), by text matching from the previous match on. Nil on miss —
     /// the caller keeps the last highlight instead of erasing it. Pure (tested).
+    ///
+    /// Match is by WHOLE word (non-letter/non-digit on both sides): expansions
+    /// of the spoken text (years spelled out, `p. 12` read aloud) contain short
+    /// fragments like the `e` of `novecentos e cinquenta` that matched INSIDE
+    /// later displayed words, dragging the cursor forward — the yellow jumped
+    /// on citations with year + page while the audio flowed on.
     static func locateWord(full: String, entry: Range<String.Index>, segWords: [String], target: Int) -> (low: Int, high: Int)? {
         let phraseText = String(full[entry])
         var cursor = phraseText.startIndex
@@ -156,9 +162,17 @@ struct ClickableTextView: NSViewRepresentable {
         for (i, raw) in segWords.enumerated() {
             guard i <= target else { break }
             let needle = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !needle.isEmpty,
-                  let m = phraseText.range(of: needle, options: .caseInsensitive,
-                                           range: cursor..<phraseText.endIndex) else { continue }
+            guard !needle.isEmpty else { continue }
+            var from = cursor
+            var match: Range<String.Index>?
+            while from < phraseText.endIndex {
+                guard let m = phraseText.range(
+                    of: needle, options: .caseInsensitive,
+                    range: from..<phraseText.endIndex) else { break }
+                if isWholeWord(phraseText, m) { match = m; break }
+                from = phraseText.index(after: m.lowerBound)
+            }
+            guard let m = match else { continue }
             if i == target { found = m }
             cursor = m.upperBound
         }
@@ -170,6 +184,21 @@ struct ClickableTextView: NSViewRepresentable {
         let ns = NSRange(bLow..<bHigh, in: full)
         guard ns.length > 0 else { return nil }
         return (ns.location, ns.location + ns.length)
+    }
+
+    /// Whole-word boundary for the karaoke matcher: the character before the
+    /// match and the one where it ends must both be outside letter/digit
+    /// (Unicode-aware, like the match itself).
+    private static func isWholeWord(_ text: String, _ range: Range<String.Index>) -> Bool {
+        if range.lowerBound > text.startIndex {
+            let before = text[text.index(before: range.lowerBound)]
+            if before.isLetter || before.isNumber { return false }
+        }
+        if range.upperBound < text.endIndex {
+            let after = text[range.upperBound]
+            if after.isLetter || after.isNumber { return false }
+        }
+        return true
     }
     /// already shows exactly this. Colors compare by resolved sRGB components,
     /// never by `description` (dynamic colors describe differently per appearance).

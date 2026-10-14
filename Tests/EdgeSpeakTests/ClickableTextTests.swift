@@ -49,6 +49,24 @@ struct LocateWordTests {
         #expect(ClickableTextView.locateWord(
             full: full, entry: entry, segWords: ["scientists"], target: 5) == nil)
     }
+
+    /// Citation with year + page, PT voice spelling the year out: the
+    /// expansion fragments (`mil`, `e`, `de`) must miss cleanly instead of
+    /// matching inside later words and dragging the cursor — the panel
+    /// yellow jumped while the audio flowed on.
+    @Test func citationYearExpansionDoesNotDragCursor() {
+        let text = "como viu Carnap 1950 segue a tese"
+        let range = text.startIndex..<text.endIndex
+        let spoken = ["como", "viu", "Carnap", "mil", "novecentos", "e", "cinquenta", "segue", "a", "tese"]
+        // The expansion itself has no box: caller keeps the last highlight.
+        #expect(ClickableTextView.locateWord(
+            full: text, entry: range, segWords: spoken, target: 5) == nil)
+        // The word after the expansion still lands on its own occurrence.
+        let got = ClickableTextView.locateWord(
+            full: text, entry: range, segWords: spoken, target: 7)
+        let want = (text as NSString).range(of: "segue")
+        #expect(got?.low == want.location && got?.high == want.location + want.length)
+    }
 }
 @MainActor
 struct ClickablePaintTests {
