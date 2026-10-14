@@ -22,8 +22,10 @@ Como funciona (guia em docs/pesquisas/pymupdf-pesquisa.md):
   ("state-of-the-art") nunca entra na regra. Soft hyphen invisível é
   removido sempre.
 - Sobrescrito (`sup`): bit 1 das flags do span (detecção do MuPDF) ou
-  tamanho <0.8×mediana com baseline elevada. Serve à detecção de marcadores
-  de nota no Swift.
+  tamanho <0.8×mediana com base elevada acima da base do corpo da linha.
+  Vale por span que cruze a palavra, não só pelo de maior área: o `words`
+  cola o marcador ("realist’s.1") e a área máxima herdaria o corpo. Serve
+  à detecção de marcadores de nota no Swift.
 
 Uso:
     pdf_extract.py --pdf ARQUIVO --out SAIDA.json
@@ -114,6 +116,45 @@ def _junta_fim(t_ult, t_pri):
             return colado
         return t_ult + t_pri
     return None
+
+
+# Chamada de nota em nível de span (pesquisa docs/pesquisas/pymupdf-tipos.md):
+# o `words` do PyMuPDF cola o marcador à palavra ("realist’s.1") e o
+# casamento por área máxima herda o span do corpo — o span do marcador se
+# perde. Vale o texto do span, não o da palavra: 1–2 dígitos com parêntese
+# ou `.)` opcional, símbolo de nota (* † ‡ § ¶) ou dígito sobrescrito
+# unicode. (Só texto horizontal LTR: a regra de sufixo abaixo usa o eixo x.)
+_RE_MARCADOR = re.compile(r"^[(\[]?(\d{1,2}|[*†‡§¶]|[¹²³⁴⁵⁶⁷⁸⁹⁰]{1,2})[.)\]]?$")
+
+
+def _span_marcador(span, mediana, fundo_corpo):
+    """O span tem cara de marcador de nota? Bit do MuPDF vence sempre;
+    sem ele, vale dígito pequeno (<0,8×mediana, a faixa medida 0,62–0,75×)
+    com base elevada acima da base do corpo da linha (>0,25× o tamanho;
+    abaixo do teto PDFix de 0,5×). Símbolo (*†‡§¶) dispensa o tamanho
+    menor — costuma vir em corpo cheio, só elevado. Dígito unicode
+    sobrescrito (¹²³) é sinal por si só. `fundo_corpo` é o fundo (bbox[3],
+    coords do dict, y para baixo) do corpo da linha; None sem corpo.
+    """
+    texto = (span.get("text") or "").strip()
+    if not texto or not _RE_MARCADOR.match(texto):
+        return False
+    if int(span.get("flags", 0)) & 1:
+        return True
+    if texto[0] in "*†‡§¶" or texto[0] in "¹²³⁴⁵⁶⁷⁸⁹⁰":
+        return fundo_corpo is not None and span["bbox"][3] < fundo_corpo
+    tamanho = float(span.get("size", 0.0))
+    return (
+        mediana > 0
+        and 0 < tamanho < 0.8 * mediana
+        and fundo_corpo is not None
+        and (fundo_corpo - span["bbox"][3]) > 0.25 * tamanho
+    )
+
+
+def _cruza(a, b):
+    """Interseção de caixas com área positiva (toque de borda não vale)."""
+    return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
 
 
 # Evidência interna do documento (pré-scan em main): palavras inteiras
@@ -314,6 +355,18 @@ def main() -> int:
             info = estrutura.get(chave, {"spans": []})
             spans = info["spans"]
             topo_linha = min((s["bbox"][1] for s in spans), default=None)
+            # Base do corpo da linha (fundo maior entre spans de corpo, em
+            # coords do dict com y para baixo): o marcador sobrescrito tem a
+            # base ACIMA dela. O topo não serve — o marcador costuma definir
+            # o topo da linha e a diferença dá zero (medido em 2026-10-14).
+            fundo_corpo = max(
+                (
+                    s["bbox"][3]
+                    for s in spans
+                    if float(s.get("size", 0.0)) >= 0.8 * mediana
+                ),
+                default=None,
+            ) if mediana > 0 else None
             itens = []
             for p in partes:
                 span = _span_de(
@@ -329,6 +382,32 @@ def main() -> int:
                 sup = bool(flag & 1) or (
                     mediana > 0 and 0 < tamanho < 0.8 * mediana and elevado
                 )
+                # Marcador colado ("realist’s.1"): o `words` funde marcador e
+                # palavra num token só e o casamento por área herda o span do
+                # corpo. Todo span da linha com cara de marcador (bit ou
+                # geometria de base elevada) que cruze a palavra a marca —
+                # com regra de sufixo no token colado: palavra juntada por
+                # hífen tem caixa-união larga e cruzaria o marcador do meio
+                # da linha ("reference", "departure" no artigo medido). Vale
+                # centro do span nos 30% finais da palavra; palavra que já é
+                # só o marcador ("7", "(1)") vale por qualquer cruzamento.
+                if not sup and spans:
+                    caixa_dict = [p["box"][0], h - p["box"][3],
+                                  p["box"][2], h - p["box"][1]]
+                    sozinha = bool(_RE_MARCADOR.match(p["text"].strip()))
+                    for s in spans:
+                        if not _span_marcador(s, mediana, fundo_corpo):
+                            continue
+                        if not _cruza(caixa_dict, s["bbox"]):
+                            continue
+                        if sozinha:
+                            sup = True
+                            break
+                        meio = (s["bbox"][0] + s["bbox"][2]) / 2
+                        larg = caixa_dict[2] - caixa_dict[0]
+                        if larg > 0 and (meio - caixa_dict[0]) / larg >= 0.7:
+                            sup = True
+                            break
                 itens.append({"text": p["text"], "box": p["box"], "sup": sup})
             caixas = [p["box"] for p in partes]
             # Fonte dominante da linha (maior span não-sobrescrito): notas
