@@ -22,10 +22,6 @@ atender.
 Nenhum código de terceiros foi copiado para este app: só a ideia geral
 (PDF + voz offline) serviu de inspiração.
 
-- **PDFVoice (MIT)** — ideia de navegação por frase no PDF (ponto→página→
-  frase mais próxima pelos retângulos: contenção vence, senão a mais
-  próxima, senão nada); algoritmo reescrito aqui do zero, sem código copiado.
-
 ## Extração de PDF
 
 - **PyMuPDF** — extração de texto com caixas de palavra (via

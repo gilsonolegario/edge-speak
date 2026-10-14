@@ -1,58 +1,365 @@
-# EdgeSpeak — contrato de interfaces
+# EdgeSpeak — interface contract
 
-Estado: 2026-10-13. Leitor de PDF/texto com leitura em voz alta em
-**fluxo**: cada fatia sintetizada toca assim que fica pronta. Dois
-motores: edge-tts online (vozes Microsoft neurais, devolve tempos
-por palavra) e Piper offline (um WAV por frase, sem tempos de
-palavra). Árvore verde: **123 testes em 14 suítes** (`swift test`),
-build limpo.
+State: 2026-10-13. A PDF/text reader with aloud reading in
+**streaming**: each synthesized slice plays as soon as it is ready.
+Two engines: edge-tts online (Microsoft neural voices, returns
+per-word timings) and Piper offline (one WAV per sentence, no word
+timings). Tests: **133 `@Test` functions in 18 files**, counted
+from the source tree on 2026-10-13 (`swift test` is the runner;
+the green/red state is not asserted here — it was not run for this
+document).
 
-UI no desenho do IINA: **toolbar no topo** (Abrir, Voz, Opções) +
-conteúdo + **barra de controle flutuante na base, sempre visível**.
+UI: **toolbar at the top** (Open, Voice,
+Options) + content + **floating control bar at the bottom, always
+visible**.
 
-- Linguagem: Swift / SwiftUI, plataforma macOS 14+. Pacote SwiftPM
-  (Swift 6, modo de linguagem v5), alvo `EdgeSpeak`, fontes em
-  `Sources/EdgeSpeak/` (20 arquivos), testes em
-  `Tests/EdgeSpeakTests/` (14 suítes, swift-testing: `@Test`/
-  `#expect`, não XCTest).
-- **Decisão de arquitetura:** o motor permanece interno
+- Language: Swift / SwiftUI, platform macOS 14+. SwiftPM package
+  (Swift 6 tools, language mode v5), target `EdgeSpeak`, sources in
+  `Sources/EdgeSpeak/` (20 files), tests in `Tests/EdgeSpeakTests/`
+  (18 files, swift-testing: `@Test`/`#expect`, not XCTest).
+- **Architecture decision:** the engines stay internal
   (`StreamingPlayer` + `EdgeTTS`/`PiperTTS`). `edge-playback`/mpv
-  foi descartado porque não devolve tempos por palavra nem permite
-  pular por frase — perderia o destaque palavra a palavra, o cache
-  em disco e a voz offline.
-- Processo: o orquestrador define os contratos de fronteira entre
-  arquivos; a implementação corre em subagentes com escopos
-  disjuntos; a integração é verificada com `swift build`, `swift
-  test` e reabertura do app.
-- Contexto de pesquisa (citado, não copiado): as regras de
-  verbalização de fórmulas seguem o levantamento em
-  `docs/pesquisas/logica-leitura.md` (forallx Calgary, SEP,
-  MathSpeak/ClearSpeak/SRE, manuais PT-BR — UFS/UFR/UFSC), com
-  selo de status por regra ([P]/[S]/[I]/[?]); o mapa de OSS e
-  licenças está em `docs/pesquisas/oss-mapa.md` (MFA, SRE,
-  pdfminer.six, AVAudioPlayerNode, EPUBKit… — o que adaptar, o que
-  evitar e por quê); os achados da auditoria paralela de UI e
-  threading vivem em `docs/pesquisas/auditoria-20261013.md`
-  (palavra do painel em amarelo, Play que retoma com síntese em
-  voo, `store` fora da main, pulo pendente limpo no erro, arrasto
-  que não dispara salto — todos incorporados nas seções abaixo).
+  was discarded because it returns neither per-word timings nor
+  per-sentence skip — it would lose the word-by-word highlighting,
+  the on-disk cache and the offline voice.
+- Process: the orchestrator defines the boundary contracts between
+  files; implementation runs in subagents with disjoint scopes;
+  integration is verified with `swift build`, `swift test` and a
+  relaunch of the app.
+- Research context (cited, not copied): the verbalization rules
+  follow the survey in `docs/pesquisas/logica-leitura.md`
+  (forallx Calgary, SEP, MathSpeak/ClearSpeak/SRE, PT-BR manuals —
+  UFS/UFR/UFSC) with a status seal per rule ([P]/[S]/[I]/[?]); the
+  OSS map and licenses are in `docs/pesquisas/oss-mapa.md`; the
+  parallel UI and threading audit findings live in
+  `docs/pesquisas/auditoria-20261013.md` (word in the panel in
+  yellow, Play resumes with synthesis in flight, `store` off the
+  main actor, pending jump cleared on error, drag that does not
+  trigger a jump — all incorporated in the sections below).
 
 ---
 
-## 1) `Sources/EdgeSpeak/EdgeTTS.swift` — motor online em fluxo
+## 1) UI map
 
-`enum EdgeTTS`, sem estado.
+### `EdgeSpeakApp.swift` — app, delegate, scenes
+
+`WindowGroup("EdgeSpeak") { ContentView() }` with an `AppDelegate`
+(opens PDFs and text by double-click or drag onto the app icon, posts
+`.edgeSpeakOpenFile`) plus the `Settings` scene (`SettingsView()`,
+⌘,). `ContentView` also accepts a command-line argument and a drop
+onto the window (`.onDrop`). The `Info.plist` written by
+`build-app.sh` registers the app as an alternate handler for PDF,
+plain text and Markdown.
+
+**Root decision — why the window is a `Container` of fixed type:**
+applying `.toolbar` directly to content that changes shape (empty →
+editor → PDF → panel) recreates the view root and the toolbar is lost
+in the transition — measured: without a PDF the toolbar appeared (7
+buttons in the accessibility tree), and opening a PDF made it
+disappear. The `Container` (a private struct whose type never
+changes) gives the window a stable identity anchor; the toolbar
+survives.
+
+### `ContentView.swift` — layout B2, no NavigationSplitView
+
+```
+Toolbar (Open | Voice picker | Options menu)
+content (PDFDocumentView when a PDF is open, else the editor or the clickable text panel)
+PlayerBar  ← floating, always visible
+```
+
+- Toolbar: **Open** (import panel, disabled during synthesis),
+  **Voice** picker (menu style, sections: Offline / English /
+  Portuguese, disabled during synthesis; a saved voice that no longer
+  exists falls back to the default, or the Picker loses its
+  selection and synthesis fails), **Options** menu.
+- Options menu: *Follow reading* toggle (always present — the
+  text-only mode also auto-scrolls and the user needs to stop it),
+  font size −2/+2 (⌘−/⌘+) and default (⌘0, limits 12–42), *Generate
+  new reading* (discards the transcription and replays; disabled
+  without a transcription), *Settings…* (`SettingsLink`). Rate, text
+  mode and footnotes live in the Settings window, not in this menu.
+- Keyboard, monitored with `NSEvent.keyDown` (the PDFView is AppKit
+  and swallows SwiftUI shortcuts): **Enter** = play/pause always;
+  **Space** = play/pause only outside the editor and the PDF, and
+  **never during `isBusy`** (during synthesis Space is ignored —
+  before, it cancelled and restarted the synthesis, following the
+  disabled-button rule); **⌥← / ⌥→** = ±15 s. Modifiers
+  `.capsLock`/`.numericPad`/`.function` are cleared before the
+  comparison.
+- File loading by generation (`loadGeneration`): PDF extraction runs
+  on `Task.detached` (the Python process waits with `Thread.sleep`
+  for up to 180 s — on the main actor the UI froze), with a
+  security-scoped resource guard (`startAccessingSecurityScopedResource`)
+  and disposal of a late result when another file came in front.
+  Before switching, `cancelSynthesis` + `stopPlayback` —
+  `stopPlayback` alone leaves the synthesis task alive and it would
+  enqueue audio from the old document again.
+- `.onChange(of: integralMode)` → `handleIntegralModeChange()`:
+  discards the current transcription (`discardTranscription`) and, if
+  a reading was in course, restarts with the new list; with no
+  reading, only discards (the next play already uses the new mode).
+  No loop: neither the discard nor the play changes `integralMode`.
+- Panel highlight **by global sentence index** (not by text search):
+  repeated sentences would otherwise highlight the wrong occurrence.
+  The `AttributedString` uses **AppKit-scoped attributes on purpose**
+  (`appKit.foregroundColor`/`appKit.backgroundColor`): attributes in
+  SwiftUI scope have no counterpart in `NSAttributedString` — the
+  panel dropped them and nothing was highlighted. Base color
+  `labelColor` (light/dark).
+- Word-by-word karaoke in the panel: match by text with a sequential
+  cursor (the spoken text expands years and abbreviations — a direct
+  index would land on the wrong word); a matched word gets bold +
+  yellow background (α 0.75) + dark text — the PDF's yellow, not the
+  system blue: one karaoke color across both views (an audit finding;
+  dark on yellow reads well in both themes).
+- Attributed-string cache by (sentence, word): the view is re-evaluated
+  on every progress tick; rebuilding 45k letters from scratch each
+  time saturated the main thread. Outside a reading it computes
+  directly; during a reading it writes the cache asynchronously and
+  returns the value.
+- `currentWordRect` (PDF karaoke): only with a PDF, only with an
+  online voice (`!PiperTTS.isOfflineVoice(controller.voiceInUse)`),
+  valid indices and a matched box via `WordAligner` (by normalized
+  text, never by index) — a word that is not found becomes an absence
+  of highlight, never a wrong highlight.
+- `statusBanner`: a transient strip (fades in 4 s), permanent during
+  synthesis (it is live progress), with the synthesis percentage, a
+  "no highlighting" badge (audio without segments) and an offline-voice
+  badge.
+- `clickToPlay`: the reveal token takes the PDF to the clicked
+  passage at once; with no audio and no synthesis in course, it
+  synthesizes **from the clicked sentence** (`Array(lista[pos...])`)
+  and tries the jump (the controller keeps it pending and retries
+  with each arriving slice).
+- The `wordAligner` state is `@State` to survive view re-evaluation
+  cycles — the yellow highlight cannot restart from zero on every
+  tick.
+
+### `PlayerBar.swift` — transport only
+
+Knows nothing about the phrase list or the voice:
 
 ```swift
-static let edgeTTSPath: String   // ~/.local/bin, /opt/homebrew/bin, /usr/local/bin; senão "edge-tts"
-static let ffmpegPath: String?   // concatenação; nil → anexa bytes
+struct PlayerBar: View {
+    @ObservedObject var controller: SpeechController
+    let textLength: Int
+    let canPlay: Bool
+    let onTogglePlay: () -> Void
+    let onTransport: () -> Void      // scrubber dragged or ±15 s (takes the PDF to the passage)
+}
+```
 
-static var pythonPath: String                    // venv de suporte (BundledEnv) quando pronto; senão probe legado
-static func pythonForSynthesis(progress:) throws -> String  // prepara o venv embutido; legado só em dev
+- Center button always `play.fill`/`pause.fill` (never `hourglass`):
+  during synthesis it is disabled (a second click would cancel and
+  restart) but still shows play, instead of looking stuck.
+  `.disabled(!canPause && (!canPlay || controller.isBusy))`.
+- Left button is **cancel synthesis** (⌘.) during `isBusy`, **stop**
+  the reading when audio exists.
+- Scrubber: `dragValue` suspends the pointer during the drag and is
+  **returned to nil on release** (`DragGesture.onEnded`) — without
+  this the local value stayed stuck, `scrubPosition` (which prefers
+  the pointer over the player) froze the time, and the scrubber for
+  the rest of the session.
+- Volume 0…1 (applied to the current player and the following ones,
+  without touching the system volume); export only with audio and no
+  synthesis in flight.
 
-static func timeout(forChars: Int) -> TimeInterval   // chars/10, clamp 60…600 (rede ruim não trava a UI)
-static let maxConcurrentChunks = 3                   // acima disso o serviço estrangula a 1ª fatia
-static let maxAttemptsPerChunk  = 3                  // retry por fatia (403 não retenta: é bloqueio, não instabilidade)
+### `PDFDocumentView.swift` — `NSViewRepresentable` over PDFKit
+
+```swift
+var document: PDFDocument
+var page: Int? = nil          // page of the sentence; nil clears
+var rects: [CGRect] = []      // line boxes of the sentence
+var wordRect: CGRect? = nil   // box of the word being read; nil clears
+var follow: Bool = true
+var revealToken: Int = 0
+var onUserScroll: (() -> Void)? = nil  // user scroll → the owner turns follow off
+var onPageClick: ((Int, CGPoint) -> Void)?
+```
+
+- **Sentence highlight (blue)**: one `PDFAnnotation` `.highlight` per
+  box (translucent accent color, α 0.28), added to the sentence's
+  page — geometric, never a text search (the filtered text is never
+  identical to the PDF's); drawn per page, they scroll with the PDF.
+  Deduplicated by its own key (`key(page:rects:)`, page + boxes),
+  **separate from the word highlight**: changing the word only moves
+  the yellow annotation, and the 10 Hz ticks recreate nothing
+  (recreating on every word made the whole paragraph blink). Removed
+  when the sentence changes or on clear (never an orphaned
+  annotation — the app never saves the document). Changing the
+  document resets all coordinator state.
+- **Word highlight (yellow)**: `PDFAnnotation` (`.highlight`,
+  `systemYellow` α 0.55) with its own state in the `Coordinator`
+  (`wordAnnotation`/`wordPage`), **reused** when page and box are
+  the same (avoids blinking when only the token changed); replaced
+  only when the box or the page changes; removed when the word
+  changes or on clear.
+- **Word scrolling**: `shouldScrollToWord` scrolls only when follow
+  is on **and** the word is outside the visible area — scrolling on
+  every word chokes the speech.
+- **User scrolling**: the `Coordinator` observes the bounds of the
+  `NSClipView` inside the `PDFView` (found in depth — PDFKit does
+  not expose it in this SDK version) and notifies `onUserScroll` only
+  when follow is on, outside a 0.5 s silence window after a
+  programmatic `go(to:)` (`markProgrammaticScroll`), the origin
+  changed (>0.5 pt) and neither the size nor the scale changed (zoom
+  and resizing change size/scale, never only the origin — a pure
+  `isUserScroll` decision, tested). The owner (`ContentView`) turns
+  *Follow reading* off on the notification — manual scrolling always
+  wins over automatic.
+- **Clicking the PDF (`ClickablePDFView`)**: stores the point in
+  `mouseDown` and reports only on `mouseUp` with a movement < 4 pt —
+  distinguishing a click from a drag/selection; the rest follows
+  PDFKit. `onPageClick` returns (0-based page index, point in page
+  coordinates).
+
+### `ClickableTextView.swift` — `NSViewRepresentable` over `NSTextView`
+
+- **Why `NSTextView` and not SwiftUI `Text`**: `Text` renders the
+  `AttributedString` but returns only "the text was clicked", not
+  **where**; jumping the reading to the sentence needs the character
+  index under the cursor, and only TextKit provides that reliably
+  (`glyphIndex(for:in:)` → `characterIndexForGlyph(at:)`, with
+  window-to-container coordinate conversion, and the container has
+  its own inset).
+- **Why an `NSScrollView` around it**: `NSTextView` has no intrinsic
+  size; giving it the height of the whole text makes the panel
+  swallow the window and hide the PDF (a measured defect). With inner
+  scrolling the panel has a bounded height (140…300 pt).
+- `pointSize` is `CGFloat` (not `Font`): `Font` is an opaque wrapper
+  and `NSTextView` needs the point value.
+- **Click, not drag (`ClickReportingTextView`)**: `mouseDown` stores
+  the window point and the character (window→view conversion,
+  independent of scrolling); `mouseUp` reports only with a movement
+  < 4 pt (`hypot`) — without the guard, dragging to select triggered
+  a jump at the press point (an audit finding; the PDF already
+  filtered the same threshold in `ClickablePDFView`).
+- **Teleprompter**: `scrollTo` (UTF-16, as TextKit counts) scrolls to
+  the sentence being read when it changes — not on every word, to
+  avoid trembling; with `follow` off it never touches the user's
+  scrolling.
+
+### `SettingsView.swift` — Settings scene (⌘,)
+
+Three tabs: **Reading** (voice, rate, follow, language), **Text**
+(font size, *Full text*, *Read footnotes*) and **Advanced** (on-disk
+cache size and a *Clear cache* button, via
+`CacheDisco.totalBytes()`/`clearAll(preserving:)` with an
+`.edgeSpeakClearCache` alert; the measurement runs off the main
+actor). Every control writes through `@AppStorage` to the keys of
+`AppSetting` — the same keys `ContentView` uses. Honest note: the
+Settings scene cannot see the main window's controller, so there is
+no way to disable the controls during synthesis (the cadence applies
+to the next synthesis anyway).
+
+---
+
+## 2) Feature → code map
+
+Synced with `docs/pesquisas/mapa-funcionalidades.md`. Line-precise
+references live in that map; symbol names here are verified against
+the source tree and are the stable reference. Test names are the
+declared `@Test` functions.
+
+1. **Yellow per word, never jumping back** — implementation:
+   `StreamingPlayer` (0.1 s timer + `updateHighlight`,
+   `currentWordIndex`); mirrored in `SpeechController`
+   (`highlightWordIndex`); view: `ContentView` (online karaoke,
+   bold + strong background); alignment: `WordAligner`
+   (Needleman–Wunsch, the current phrase never moves back).
+   Tests: `WordAlignerTests` (`expansoesNaoRoubanCaixa`,
+   `repetidaComVizinhasDiferentes`, …). **Gap:** no automated test
+   for the timer/UI — visual regression is manual.
+2. **Blue per sentence** — implementation: `PDFDocumentView` (one
+   `.highlight` annotation per box); text: `ContentView`
+   (`highlightIndex` → range, accent color α 0.35); emitted by
+   `StreamingPlayer` (`currentSegmentText`/`Index`/`Page`).
+   **Gap:** no automated color test — manual only.
+3. **Manual scrolling wins + Go to the passage** — implementation:
+   `PDFDocumentView` (`onUserScroll`, `isUserScroll`);
+   `ContentView` (`followReading`, the `onUserScroll` handler turns
+   it off, the `goToPassage` button, `revealToken` + `follow =
+   true`); catalog: `L10n` (`ui.goToPassage`). Tests:
+   `PDFFollowTests` (`rolagemDoUsuarioDesliga`, …).
+4. **Click plays from the sentence (even with no audio)** —
+   implementation: text panel `ContentView` (`onTap` charIndex →
+   entry; `clickToPlay`: `revealToken` + `jumpToSegment`, or play
+   from the sentence); PDF: `ContentView` via
+   `PhraseLocator.phraseIndex` and `clickToPlay`; locator:
+   `PhraseLocator`; pending jump: `SpeechController`
+   (`pendingJumpIndex`, `jumpToSegment`, `retryPendingJump`);
+   player: `StreamingPlayer` (`seek(toSegment:)`, `jumpToSegment`).
+   Tests: `PdfClickLocatorTests` (`contencaoVence`, …),
+   `StreamingProofTests` (`saltoPorFraseSemDuracoes`).
+5. **Direct jump to the slice** — implementation:
+   `StreamingPlayer` (`seek(toSegment:)`: the chunk containing the
+   sentence + local `seg.start`; global `seek` for the bar; shared
+   `gotoChunk`); controller: `SpeechController` (`seek(toSegmentAt:)`,
+   `seek(to:)`). Tests: `StreamingProofTests` (`saltoPorFraseSemDuracoes`).
+6. **Discard transcription + Generate new reading** —
+   implementation: `SpeechController` (`hasTranscription`,
+   `discardTranscription`: clears key/audio/segments/highlights +
+   `CacheDisco.remove`, `cancelSynthesis`); UI: `ContentView`
+   (discard, `handleIntegralModeChange`); catalog: `L10n`
+   (`status.transcriptionDiscarded`, `ui.newReading`). Tests:
+   `TranscriptionResetTests` (`modosGeramTextosEChavesDiferentes`,
+   `removerApagaDoCache`).
+7. **Persisted voice, Settings, PT/EN translation** — implementation:
+   keys in `AppSettings` (`voiceKey`, `rateKey`, `followKey`,
+   `integralKey`, `footnoteKey`, `fontKey`); UI: `ContentView`
+   (`@AppStorage` for voice/rate/language); Settings:
+   `SettingsView` (offline voices, rate choices, footnotes toggle);
+   catalog: `L10n` (`resolve` + fallback, pt/en tables). Tests:
+   `L10nResolverTests`, `L10nCompletenessTests`.
+8. **Formulas spelled out with pauses** — implementation:
+   `ReadAloudFilter` (`forSpeech`, `expandLogic`, `resolveHorseshoe`,
+   `expandSetBuilder`, `expandAbbreviations`, `spellOutYears`,
+   `numeroPorExtenso`, the formula-line rule). Tests:
+   `ReadAloudFilterTests` (`simbolosExistentes`,
+   `falaNaoAlteraExibicao`, …). **Gap:** no real formula PDF
+   measured (declared in the suite header) — the pure function is
+   covered; how extraction delivers a symbol (entity, LaTeX, image)
+   is unknown.
+9. **Footnotes (marker + body + option)** — implementation: linking
+   in `TextImport` (`resolveFootnotes`, `marcaAnterior`, use in
+   `makePhrases`); announcement in `ReadAloudFilter`
+   (`expandFootnoteMarkers` via `forSpeech`) with the mold in `L10n`
+   (`speech.footnote`); option: `AppSettings` (`footnoteKey`,
+   default true), `ContentView`, `SettingsView`. Tests:
+   `FootnoteTests` (`corpoVaiParaAposOMarcador`,
+   `notaDeFimLigaAtras`, …).
+10. **Online/offline engines, cache, venv** — online: `EdgeTTS`
+    (`buildChunks` — first slice short, cut retreats to paragraph
+    end; `mapSegments`; streaming in order via `OrderedPublisher`;
+    `join`); offline: `PiperTTS` (own venv, `venvPython` →
+    `BundledEnv`, `ensureVenv` + voice, `runStreaming` one sentence
+    at a time); cache: `CacheDisco` (`key`, `lookup`, `store`,
+    `remove`); venv: `BundledEnv` (`readyPython`, `ensure`,
+    `pickPython`); scripts: `Tools/synth_timing.py`,
+    `Tools/piper_synth.py`, `Tools/pdf_extract.py`. Tests:
+    `BundledEnvTests` (`suporteValidoVence`, `nomesDeVoz`),
+    `EdgeTTSChunkTests`, `MotoresProtecaoTests`. **Gap:** no
+    end-to-end test of the cache join/eviction or of Piper offline.
+
+---
+
+## 3) Layer contracts
+
+### `EdgeTTS.swift` — online engine in stream
+
+`enum EdgeTTS`, stateless.
+
+```swift
+static let edgeTTSPath: String   // ~/.local/bin, /opt/homebrew/bin, /usr/local/bin; else "edge-tts"
+static let ffmpegPath: String?   // concatenation; nil → append bytes
+
+static var pythonPath: String                    // support venv (BundledEnv) when ready; else legacy probe
+static func pythonForSynthesis(progress:) throws -> String  // prepares the bundled venv; legacy only in dev
+
+static func timeout(forChars: Int) -> TimeInterval   // chars/10, clamped 60…600 (a bad network does not freeze the UI)
+static let maxConcurrentChunks = 3                   // above this the service throttles the first slice
+static let maxAttemptsPerChunk  = 3                  // retry per slice (a 403 does not retry: it is a block, not an instability)
 
 static func buildChunks(_ phrases: [TextImport.Phrase], maxChars: Int, firstChars: Int = 450) -> [[TextImport.Phrase]]
 static func mapSegments(_ script: [Segment], _ phrases: [TextImport.Phrase]) -> [Segment]
@@ -61,158 +368,162 @@ static func killRunningProcesses()
 static func purgeStaleDirectories(keeping: URL)
 ```
 
-`Segment` (frase lida) e `Word` (palavra) — codáveis, Sendable:
+`Segment` (a spoken sentence) and `Word` (a word) — Codable,
+Sendable:
 
 ```swift
 struct Segment: Codable, Sendable, Identifiable {
     struct Word: Codable, Sendable { let start: Double; let duration: Double; let text: String }
-    let start: Double      // instante dentro do áudio final
+    let start: Double      // instant inside the final audio
     let duration: Double
     let text: String
-    var words: [Word] = []      // vazio sem tempos de palavra (Piper)
-    var index: Int = -1         // índice global da frase na lista ativa
-    var page: Int?              // página de origem (nil sem PDF)
-    var rects: [CGRect] = []    // caixas das linhas da frase de origem
+    var words: [Word] = []      // empty without word timings (Piper)
+    var index: Int = -1         // global index of the sentence in the active list
+    var page: Int?              // page of origin (nil without a PDF)
+    var rects: [CGRect] = []    // line boxes of the sentence of origin
     var id: Int { index >= 0 ? index : Int(start * 1000) }
 }
 enum ChunkDelivery: Sendable { case chunk(index: Int, url: URL, segments: [Segment]); case final(Result) }
 ```
 
-Regras e decisões verificadas:
+Verified rules and decisions:
 
-- **Por que `AsyncStream` e não `TaskGroup` de janela fixa:** com
-  o grupo, o consumidor só é resumido quando uma tarefa retorna —
-  medido: a fatia 0 pronta aos 38 s era entregue só aos 100 s. O
-  stream entrega no instante. As fatias são sintetizadas em
-  paralelo (3 em voo, cano cheio desde t=0 — antes a fila
-  esvaziava aos ~30 s) mas **entregues em ordem** por
-  `OrderedPublisher` (classe com `NSLock`: o emissor roda dentro do
-  consumidor do grupo e o índice precisa de leitura atômica; interna
-  para o harness headless cobrir a ordem).
-- **Por que a primeira fatia é curta (~450 chars):** o áudio entra
-  em cerca de 1 s; as demais vão atrás em ordem de índice.
-- O texto da fatia é montado com `ReadAloudFilter.forSpeech` por
-  frase e junção `" "` — e **`"\n"` na fronteira de parágrafo**
-  (`phrase.paragraphEnd`): é o respiro da pausa entre parágrafos.
-  **Nunca duplicar pontuação terminal** ("Frase.."): o `_split_sentences`
-  do script (modo sem `--lines-file`) deriva as frases do texto de
-  entrada e casaria a pontuação sobrando como frase-extra, quebrando
-  o emparelhamento 1:1 com `mapSegments`. `\n` não casa o regex de
-  terminadores.
-- **Fronteira com o script em 1:1 por construção:** além do texto
-  da fatia (`chunk-%04d.txt`), cada fatia escreve `chunk-%04d.lines.txt`
-  com UMA frase de fala por linha (o mesmo texto `forSpeech`, na
-  ordem) e passa `--lines-file`. O script trata cada linha como um
-  trecho — 1 segmento por linha, na ordem — sem derivar frases por
-  regex próprio (antes, dois regex diferentes, um no Swift e outro
-  no Python, podiam desalinhar os tempos). O modo antigo por regex
-  segue disponível sem `--lines-file`, só para compatibilidade.
-- `mapSegments` emparelha por ordem: o texto publicado é o da
-  frase (lista ativa); do script vêm só os tempos. Eventos extras
-  são ignorados; frases sem evento herdam o fim da anterior —
-  nunca se inventa tempo, só índice, página e caixas.
-- **Por que ler a duração do arquivo (`AVURLAsset.load(.duration)`)
-  em vez de somar os tempos das frases:** há silêncio no fim de
-  cada fatia, e é esse silêncio que precisa entrar na conta para o
-  destaque das fatias seguintes não adiantar nem atrasar.
-- Retry com espera progressiva (0,8 s × tentativa); `403` no stderr
-  quebra o loop (bloqueio do serviço — repetir não adianta).
-- **Por que `stderr` vai para arquivo temporário:** pipe cheio
-  causaria deadlock em processo longo. Timeout encerra (SIGTERM,
-  2 s de graça, depois SIGKILL).
-- Concatenação: ffmpeg quando há (`-f concat -c copy`), senão
-  anexação de bytes. Falha em qualquer etapa apaga o diretório da
-  síntese.
-- `loadSegments` degrada em silêncio: JSON de tempos ilegível
-  devolve `[]` — sem destaque, mas o áudio continua válido.
-- `purgeStaleDirectories(keeping:)` remove `EdgeSpeak-*` do
-  temporário **exceto** o da leitura corrente e o registrado em
-  `protectedDir` (o MP3 fica em disco porque o `AVAudioPlayer`
-  precisa dele enquanto toca; sem essa proteção, a próxima síntese
-  apagaria o áudio em playback e o `restart` caía no guarda
-  silencioso com `hasAudio` verdadeiro).
-- `killRunningProcesses` encerra os processos registrados (só os
-  cujo primeiro argumento termina em `synth_timing.py`) e faz
-  `pkill -f synth_timing.py` — **nunca** por "python" solto, para
-  não atingir processos alheios.
-- Caminhos do Python: `pythonPath` prefere o venv de suporte
-  (`BundledEnv.readyPython()`); o legado sonda pipx,
-  `~/.local/share/edge-tts-venv`, homebrew e `/usr/bin/python3`,
-  **aceitando só o que importa `edge_tts`** (probe `-c "import
-  edge_tts"`), com cache. `pythonForSynthesis` prepara o
-  ambiente embutido; se o preparo falhar E o legado importar, o
-  legado vale (dev); senão o erro legível do preparo é o que a UI
-  mostra.
-- `synthTimingScript`: bundle primeiro (`Bundle.main`), senão
-  `Tools/` do repositório (dev).
+- **Why `AsyncStream` and not a fixed-window `TaskGroup`:** with the
+  group, the consumer is resumed only when a task returns — measured:
+  slice 0 ready at 38 s was delivered only at 100 s. The stream
+  delivers at the instant. The slices are synthesized in parallel (3
+  in flight, the pipe full from t=0 — before, the queue emptied at
+  ~30 s) but **delivered in order** by `OrderedPublisher` (a class
+  with an `NSLock`: the emitter runs inside the consumer's group and
+  the index needs an atomic read; internal so the headless harness
+  covers the order).
+- **Why the first slice is short (~450 chars):** audio enters in
+  about 1 s; the rest follows in index order.
+- The slice text is built with `ReadAloudFilter.forSpeech` per
+  phrase joined by `" "` — and **`"\n"` at the paragraph boundary**
+  (`phrase.paragraphEnd`): the breath of the pause between
+  paragraphs. **Never duplicate terminal punctuation** ("Frase.."):
+  the script's `_split_sentences` (in the mode without
+  `--lines-file`) derives sentences from the input text and would
+  match the leftover punctuation as an extra sentence, breaking the
+  1:1 pairing with `mapSegments`. `"\n"` does not match the
+  terminator regex.
+- **1:1 boundary with the script by construction:** besides the slice
+  text (`chunk-%04d.txt`), each slice writes `chunk-%04d.lines.txt`
+  with ONE spoken phrase per line (the same `forSpeech` text, in
+  order) and passes `--lines-file`. The script treats each line as a
+  passage — 1 segment per line, in order — without deriving
+  sentences with its own regex (before, two different regexes, one in
+  Swift and one in Python, could misalign the timings). The old
+  regex mode remains available without `--lines-file`, for
+  compatibility only.
+- `mapSegments` pairs by order: the published text is the sentence's
+  (active list); from the script come only the timings. Extra events
+  are ignored; phrases without an event inherit the previous end —
+  time is never invented, only index, page and boxes.
+- **Why read the duration from the file (`AVURLAsset.load(.duration)`)
+  instead of summing the phrase timings:** there is silence at the end
+  of each slice, and that silence must count so the highlighting of
+  the following slices is neither ahead nor behind.
+- Retry with progressive wait (0.8 s × attempt); a `403` on stderr
+  breaks the loop (a service block — retrying does not help).
+- **Why `stderr` goes to a temp file:** a full pipe would deadlock a
+  long process. The timeout terminates (SIGTERM, 2 s of grace, then
+  SIGKILL).
+- Concatenation: ffmpeg when available (`-f concat -c copy`), else
+  byte appending. A failure at any step deletes the synthesis
+  directory.
+- `loadSegments` degrades silently: an unreadable timings JSON
+  returns `[]` — no highlighting, but the audio stays valid.
+- `purgeStaleDirectories(keeping:)` removes `EdgeSpeak-*` from the
+  temp folder **except** the current reading and the one registered
+  in `protectedDir` (the MP3 stays on disk because `AVAudioPlayer`
+  needs it while playing; without this protection, the next synthesis
+  would delete the audio in playback and `restart` would fall into
+  the silent guard with `hasAudio` true).
+- `killRunningProcesses` terminates the registered processes (only
+  those whose first argument ends in `synth_timing.py`) and does
+  `pkill -f synth_timing.py` — **never** a bare "python", so as not
+  to hit other people's processes.
+- Python paths: `pythonPath` prefers the support venv
+  (`BundledEnv.readyPython()`); the legacy path probes pipx,
+  `~/.local/share/edge-tts-venv`, homebrew and `/usr/bin/python3`,
+  **accepting only what imports `edge_tts`** (probe `-c "import
+  edge_tts"`), with caching. `pythonForSynthesis` prepares the
+  bundled environment; if preparation fails AND the legacy one
+  imports, the legacy is valid (dev); otherwise the legible
+  preparation error is what the UI shows.
+- `synthTimingScript`: bundle first (`Bundle.main`), else the
+  repository's `Tools/` (dev).
 
-## 2) `Sources/EdgeSpeak/PiperTTS.swift` — motor offline (um WAV por frase)
+### `PiperTTS.swift` — offline engine (one WAV per sentence)
 
-`enum PiperTTS`, sem estado. Cinco vozes (`offlineVoices`):
-faber/edresson/cadu/jeff pt-BR e lessac en-US; `isOfflineVoice(_:)`
-e `label(for:)` guiam a UI; `voiceFileBase(for:)` e
-`voiceRemotePath(for:)` são puros (testáveis).
+`enum PiperTTS`, stateless. Five voices (`offlineVoices`):
+faber/edresson/cadu/jeff pt-BR and lessac en-US; `isOfflineVoice(_:)`
+and `label(for:)` guide the UI; `voiceFileBase(for:)` and
+`voiceRemotePath(for:)` are pure (testable).
 
-- **Ambiente próprio:** `piper-venv` e `voices/` em
-  `~/Library/Application Support/EdgeSpeak/`; `ensureVenv()` cria o
-  venv legado com `/usr/bin/python3` e instala o wheel por URL
-  (arquitetura via `utsname`: `macosx_11_0_arm64` ou
-  `macosx_10_9_x86_64`, release v1.8.0 do OHF-Voice/piper1-gpl).
-  `venvPython` prefere o venv de suporte embutido (`BundledEnv`) e
-  cai para o legado.
-- **Escolha do .onnx (`pickOnnx`, pura):** suporte existente vence
-  o bundle; sem suporte, o bundle; sem nenhum, o suporte (alvo do
-  download). Voz em cache só vale com `cachedVoiceValid`: tamanhos
-  acima dos pisos (`onnxMinBytes` 1 MB, `jsonMinBytes` 512 B —
-  hipótese de planejamento que rejeita truncados grosseiros) E
-  `.onnx.json` parseável como JSON.
-- Download atômico: grava em `<destino>.part` no mesmo volume,
-  valida (`downloadComplete`: recebido ≥ piso e ≥ esperado quando
-  o servidor informou; JSON validado) e só então renomeia — parcial
-  nunca é aceito.
-- `lengthScale(for:)` traduz a cadência (`EdgeTTS.Rate`) em
+- **Own environment:** `piper-venv` and `voices/` in
+  `~/Library/Application Support/EdgeSpeak/`; `ensureVenv()` creates
+  the legacy venv with `/usr/bin/python3` and installs the wheel by
+  URL (architecture via `utsname`: `macosx_11_0_arm64` or
+  `macosx_10_9_x86_64`, release v1.8.0 of OHF-Voice/piper1-gpl).
+  `venvPython` prefers the bundled support venv (`BundledEnv`) and
+  falls back to the legacy one.
+- **Choosing the .onnx (`pickOnnx`, pure):** existing support beats
+  the bundle; without support, the bundle; with neither, the support
+  (the download target). A cached voice counts only with
+  `cachedVoiceValid`: sizes above the floors (`onnxMinBytes` 1 MB,
+  `jsonMinBytes` 512 B — a planning hypothesis that rejects grossly
+  truncated files) **and** a `.onnx.json` parseable as JSON.
+- Atomic download: writes to `<destination>.part` in the same volume,
+  validates (`downloadComplete`: received ≥ floor and ≥ expected when
+  the server reported it; JSON validated) and only then renames — a
+  partial file is never accepted.
+- `lengthScale(for:)` translates the cadence (`EdgeTTS.Rate`) into
   `1/(1+percent/100)`.
-- **Sessão persistente (`PiperSession`):** o app lança
-  `piper_synth.py` como filho (a voz carrega UMA vez), espera a
-  linha `{"ready": true}` (prazo 300 s) e fala JSON-linha por
-  stdin: pedido `{"id", "text", "wav", "length_scale"}`, resposta
-  `{"id", "duration"}` ou `{"id", "error"}` — o `id` casa o pedido
-  (resposta de outro pedido é ignorada). Erro de uma frase não mata
-  o processo. `stop()` fecha stdin, SIGTERM, 2 s, SIGKILL.
-  `stopActiveSession`/`killRunningProcesses` (`pkill -f
-  piper_synth.py`) encerram sessões órfãs.
-- `runStreaming(...)`: sintetiza UMA frase por vez, **em ordem, sem
-  paralelismo** (Piper é rápido; paralelismo não compra nada). O
-  texto falado vem de `ReadAloudFilter.forSpeech`; quando
-  `phrase.paragraphEnd`, **acrescenta `\n`** ao final (pausa do
-  modelo; o vão entra na duração medida do WAV e o offset acumulado
-  segue correto — **nunca deslocar offsets à mão, nunca inserir
-  WAVs de silêncio**).
-- **Duração:** `effectiveDuration(measured:declared:)` — usa a
-  medida do WAV (`duration(of:)` lê o cabeçalho RIFF:
-  `(bytes−44)/(taxa×canais×bits/8)`); só cai para a declarada
-  quando a medida falta ou vem zero. A declarada acumula deriva no
-  destaque das frases seguintes.
-- Entrega imediata: cada frase vira `.chunk` com segmento local
-  (`start: 0`), para a primeira tocar sem esperar o resto; os
-  segmentos globais do `Result` trazem o offset acumulado.
-- `concatWavs`: ffmpeg quando há; senão junção manual (cabeçalho do
-  primeiro + PCM de todos, reescrita dos campos de tamanho).
+- **Persistent session (`PiperSession`):** the app launches
+  `piper_synth.py` as a child (the voice loads ONCE), waits for the
+  line `{"ready": true}` (300 s deadline) and speaks JSON-line over
+  stdin: request `{"id", "text", "wav", "length_scale"}`, response
+  `{"id", "duration"}` or `{"id", "error"}` — the `id` matches the
+  request (a response for another request is ignored). An error in one
+  sentence does not kill the process. `stop()` closes stdin, SIGTERM,
+  2 s, SIGKILL. `stopActiveSession`/`killRunningProcesses`
+  (`pkill -f piper_synth.py`) end orphaned sessions.
+- `runStreaming(...)`: synthesizes ONE sentence at a time, **in
+  order, without parallelism** (Piper is fast; parallelism buys
+  nothing). The spoken text comes from `ReadAloudFilter.forSpeech`;
+  when `phrase.paragraphEnd`, it **appends `\n`** (the model's
+  pause; the gap enters the measured duration of the WAV and the
+  accumulated offset stays correct — **never shift offsets by hand,
+  never insert silence WAVs**).
+- **Duration:** `effectiveDuration(measured:declared:)` — uses the
+  measured WAV (`duration(of:)` reads the RIFF header:
+  `(bytes−44)/(rate×channels×bits/8)`); it falls back to the declared
+  one only when the measurement is missing or zero. The declared one
+  accumulates drift in the highlighting of the following sentences.
+- Immediate delivery: each sentence becomes a `.chunk` with a local
+  segment (`start: 0`), so the first plays without waiting for the
+  rest; the global segments of the `Result` carry the accumulated
+  offset.
+- `concatWavs`: ffmpeg when available; else a manual join (the header
+  of the first + the PCM of all, with the size fields rewritten).
 
-## 3) `Sources/EdgeSpeak/StreamingPlayer.swift` — reprodução em fluxo
+### `StreamingPlayer.swift` — streaming playback
 
 `@MainActor final class StreamingPlayer: NSObject, ObservableObject,
-AVAudioPlayerDelegate`. É a **fonte da verdade** do estado de
-reprodução (o controller espelha).
+AVAudioPlayerDelegate`. It is the **source of truth** for playback
+state (the controller mirrors it).
 
 ```swift
 @Published private(set) var isPlaying / isPaused / isFinished / isStarved
 @Published private(set) var elapsed: TimeInterval
 @Published private(set) var knownDuration: TimeInterval
-@Published private(set) var currentSegmentText: String?   // do segmento ativo
-@Published private(set) var currentSegmentIndex: Int = -1  // índice global da frase
+@Published private(set) var currentSegmentText: String?   // of the active segment
+@Published private(set) var currentSegmentIndex: Int = -1  // global sentence index
 @Published private(set) var currentSegmentPage: Int?
-@Published private(set) var currentWordIndex: Int = -1     // palavra ativa (busca binária por tempo)
+@Published private(set) var currentWordIndex: Int = -1     // active word (binary search by time)
 @Published var volume: Float
 
 func start(urls: [URL], durations: [TimeInterval]? = nil, chunkSegments: [[EdgeTTS.Segment]])
@@ -224,54 +535,56 @@ func jumpToSegment(_ index: Int) -> Bool
 func pause() / resume() / stop() / play() / restart(audioURL:segments:)
 ```
 
-Regras e decisões:
+Rules and decisions:
 
-- `durations` (opcional) vêm medidas **fora da thread principal**
-  por quem sintetiza. Sem elas, o player sonda cada fatia em
-  fundo (`Task.detached`, `AVAudioPlayer(contentsOf:)`) e preenche
-  a duração na chegada, com guarda tripla: geração da sessão
-  (`stop()`/`restart` invalidam), índice ainda válido com a mesma
-  URL e duração ainda zerada, e `pendingProbes` evitando sonda
-  duplicada. A duração também se completa no próprio `playChunk`
-  (lê do player da reprodução, sem I/O extra na main).
-- `pause()` invalida o tique de 10 Hz do destaque; `resume()` o
-  reinstala. **Por que 10 Hz:** a palavra mais curta dura ~300 ms,
-  e cada tique reconstrói o destaque — 20 Hz com texto longo
-  saturava a main.
-- **Por que publicar só quando muda:** sem a guarda, os 4 publicados
-  (`currentSegmentText/Index/Page/WordIndex`) emitiam a cada tique
-  e a vista reconstruía o texto inteiro (45k letras) 10×/s — a
-  main saturava e o destaque parecia parado.
-- O delegate (`audioPlayerDidFinishPlaying`) só age quando o player
-  que terminou é o da sessão corrente (`player === current` e
-  `currentGeneration == playbackGeneration`) — callback tardio de
-  sessão morta é ignorado.
-- **`isStarved`:** a fila esvaziou antes da síntese terminar. Sem a
-  flag, as fatias que chegassem depois nunca voltavam a tocar (a
-  leitura "pausava" sozinha no fim da primeira fatia). `enqueue`
-  e `play()` retomam quando há áudio novo.
-- **Decisão central — por que o salto por frase vai DIRETO à fatia:**
-  no streaming as durações chegam atrasadas (sonda em fundo) e
-  `knownDuration`/offsets ficam errados até medirem. O caminho
-  antigo convertia frase→tempo global com offsets zerados e o
-  `seek(to:)` grampeava no fim do áudio medido ou caía na fatia
-  errada: o clique lia OUTRA parte. `seek(toSegment:)` procura a
-  fatia que contém a frase (por `seg.index`) e usa `seg.start`
-  (tempo LOCAL, sempre certo); o reposicionamento dentro da fatia
-  passa pelo auxiliar privado `gotoChunk`; o destaque usa os mesmos tempos
-  locais. O relógio exibido (`elapsed`) continua aproximado até as
-  sondas chegarem — só ele. Devolve `false` quando a frase ainda
-  não tem áudio.
-- `restart(audioURL:segments:)` (replay do MP3 completo ou cache):
-  os tempos JÁ são globais, então a lista inteira vale como uma
-  "fatia só" com offset zero.
-- `playChunk` com fatia corrompida pula para a PRÓXIMA (antes
-  repetia a MESMA url e queimava `nextIndex` — travamento
-  permanente com as fatias seguintes já prontas no disco).
-- Expostos para UI/testes: `currentChunkIndex`, `chunkStarts`,
+- `durations` (optional) are measured **off the main actor** by
+  whoever synthesizes. Without them, the player probes each slice in
+  the background (`Task.detached`, `AVAudioPlayer(contentsOf:)`) and
+  fills the duration on arrival, with a triple guard: session
+  generation (`stop()`/`restart` invalidate), the index still valid
+  with the same URL and the duration still zero, and `pendingProbes`
+  preventing a duplicate probe. The duration also completes in
+  `playChunk` itself (read from the playing player, no extra I/O on
+  the main actor).
+- `pause()` invalidates the 10 Hz highlight tick; `resume()`
+  reinstalls it. **Why 10 Hz:** the shortest word lasts ~300 ms and
+  each tick rebuilds the highlight — 20 Hz with long text saturated
+  the main actor.
+- **Why publish only when the value changes:** without the guard, the
+  four published fields (`currentSegmentText`/`Index`/`Page`/
+  `WordIndex`) emitted on every tick and the view rebuilt the entire
+  text (45k letters) 10×/s — the main actor saturated and the
+  highlight looked frozen.
+- The delegate (`audioPlayerDidFinishPlaying`) acts only when the
+  player that finished is the current session's (`player === current`
+  and `currentGeneration == playbackGeneration`) — a late callback
+  from a dead session is ignored.
+- **`isStarved`:** the queue emptied before synthesis finished.
+  Without the flag, slices arriving later would never play again (the
+  reading "paused" by itself at the end of the first slice).
+  `enqueue` and `play()` resume when there is new audio.
+- **The central decision — why a jump by sentence goes DIRECTLY to
+  the chunk:** in streaming, durations arrive late (background probe)
+  and `knownDuration`/offsets are wrong until measured. The old path
+  converted sentence → global time with zero offsets and `seek(to:)`
+  clamped at the end of the measured audio or fell into the wrong
+  chunk: the click read ANOTHER part. `seek(toSegment:)` finds the
+  chunk containing the sentence (by `seg.index`) and uses `seg.start`
+  (a LOCAL time, always correct); repositioning within the chunk goes
+  through the private `gotoChunk`; the highlighting uses the same
+  local times. The displayed clock (`elapsed`) stays approximate until
+  the probes arrive — only it. Returns `false` when the sentence has
+  no audio yet.
+- `restart(audioURL:segments:)` (replay of the complete MP3 or the
+  cache): the timings are ALREADY global, so the whole list counts as
+  a single "chunk" with zero offset.
+- `playChunk` with a corrupt chunk skips to the NEXT one (before, it
+  repeated the SAME url and burned `nextIndex` — a permanent stall
+  with the following slices already on disk).
+- Exposed for UI/tests: `currentChunkIndex`, `chunkStarts`,
   `currentGlobalTime`, `isQueueExhausted`, `pendingCount`.
 
-## 4) `Sources/EdgeSpeak/SpeechController.swift` — orquestrador
+### `SpeechController.swift` — orchestrator
 
 `@MainActor final class SpeechController: ObservableObject`.
 
@@ -279,11 +592,11 @@ Regras e decisões:
 @Published var isBusy: Bool; status: String; isPlaying: Bool; isPaused: Bool
 @Published private(set) var hasAudio: Bool
 @Published private(set) var completedChunks / totalChunks: Int
-@Published private(set) var segments: [EdgeTTS.Segment]   // tempos + índices
-@Published private(set) var phrases: [TextImport.Phrase]  // lista ativa
+@Published private(set) var segments: [EdgeTTS.Segment]   // timings + indices
+@Published private(set) var phrases: [TextImport.Phrase]  // active list
 @Published private(set) var voiceInUse: String
 @Published private(set) var highlightText: String?; highlightIndex: Int; highlightPage: Int?
-@Published private(set) var highlightWordIndex: Int       // move o karaokê
+@Published private(set) var highlightWordIndex: Int       // moves the karaoke
 @Published var volume: Float
 
 func play(phrases: [TextImport.Phrase], voice: String, rate: EdgeTTS.Rate = .normal, lêNotas: Bool = true)
@@ -292,863 +605,738 @@ func cancelSynthesis()
 var hasTranscription: Bool
 func discardTranscription()
 func skip(_ seconds: TimeInterval)
-func jumpToSegment(_ index: Int) -> Bool      // pendente sem áudio; retentado a cada fatia
+func jumpToSegment(_ index: Int) -> Bool      // pending without audio; retried with each slice
 func seek(to time: TimeInterval)
 func seek(toSegmentAt index: Int)
 func exportMP3()          // NSSavePanel; WAV offline, MP3 online
-func setStatus(_ message: String)            // cru, sem chave
-func setStatusKey(_ chave: String, args: [Any], locale: L.Idioma?)
-func refreshLocale(_ locale: L.Idioma)       // re-resolve o status guardado
+func setStatus(_ message: String)            // raw, no key
+func setStatusKey(_ key: String, args: [Any], locale: L.Idioma?)
+func refreshLocale(_ locale: L.Idioma)       // re-resolves the stored status
 nonisolated static func parseProgress(_ message: String) -> (done: Int, total: Int)?
 nonisolated static func failureMessage(for: Error, locale:) -> String
 ```
 
-Regras e decisões:
+Rules and decisions:
 
-- **Espelhamento do streamer (por que existe):** `currentSegmentText`
-  vive no `StreamingPlayer`, e o `sink` de `objectWillChange` só
-  republica o controller quando `isPlaying`/`isPaused`/`status`
-  mudam — o destaque ficaria parado na primeira frase. Aqui cada
-  campo do streamer tem seu próprio `sink` → `@Published` do
-  controller. `volume` é `didSet` → `streamer.volume`.
-- `fullText` (usado como **chave do cache** em `CacheDisco` e na
-  estimativa de duração) junta as frases com `" "`, e com `"\n"`
-  após `phrase.paragraphEnd`. Isso invalida os áudios antigos (sem
-  pausa) **uma única vez**; o texto publicado de cada frase não muda.
-- O motor é escolhido pela voz: `PiperTTS.isOfflineVoice(voice)` →
-  offline. O fluxo é o mesmo (fatia por fatia, áudio único no fim).
-- **Cancelamento por geração:** cada `play` incrementa
-  `synthGeneration`; a tarefa confere `gen == synthGeneration` na
-  main antes de cada efeito (streamer, `segments`, `status`,
-  `isBusy`) e a tarefa velha — mesmo presa num `run` bloqueante —
-  para sem escrever nada. `cancelSynthesis` invalida a geração,
-  sinaliza a `CancelFlag` (instância por geração: a tarefa velha
-  continua lendo `isCancelled == true` dentro do `run` bloqueante)
-  e encerra os processos dos dois motores.
-- **`play`, nesta ordem:** retoma pausa com a mesma chave
-  (`status.playing`); pausa com a síntese da mesma leitura em voo
-  (`synthKeyInFlight`) retoma o streamer e o resto engata ao
-  chegar — `status.playingWhileSynthesizing` ou
-  `status.generatingNext` (antes caía no no-op e o Play parecia
-  morto; achado da auditoria); play repetido da mesma leitura em
-  voo não inicia segunda síntese; síntese em curso com OUTRO texto
-  cancela antes.
-- **`pendingJumpIndex` (clique antes do áudio):** `jumpToSegment`
-  sem áudio guarda o índice como pendente em vez de ignorar; cada
-  fatia que chega tenta o pulo (`retryPendingJump`), então o clique
-  "toca dali" assim que o trecho existe. O pendente morre com a
-  síntese (cancelamento, fim ou erro) — sem isso, um clique
-  anterior disparava sozinho numa leitura futura.
-- **Clique sem áudio nenhum começa a síntese A PARTIR da frase
-  clicada** (`ContentView.clickToPlay`): `Array(lista[pos...])` —
-  com a lista inteira, o começo do documento tocava antes de a fatia
-  do trecho clicado existir.
-- `discardTranscription` existe porque o `play` reaproveita o áudio
-  quando a chave não muda: sem limpar áudio, segmentos, frases,
-  chave corrente e a entrada de `CacheDisco` (incluindo a chave em
-  voo, se diferente), trocar de modo de texto e apertar play
-  retomaria a leitura antiga.
-- **Status re-resolvível:** mensagens do catálogo guardam
-  `statusKey`+`statusArgs`; na troca de idioma, `refreshLocale`
-  re-resolve. Progresso cru dos motores (`recebeProgresso`) limpa a
-  chave — mensagem de motor segue no idioma de origem, e a troca não
-  a sobrescreve.
-- Estimativa de duração: `chars/700` (medido: 1391 chars/s em PT,
-  26k chars; o pessimista evita que a espera real pareça travamento).
-- `exportMP3`: o arquivo final já está junto — só copia com a
-  extensão certa (WAV offline, MP3 online) via `NSSavePanel`.
-- **Cache guardado fora da main** (`Task.detached(.utility)`):
-  copiar o MP3/WAV final dentro do bloco `MainActor.run` congelava
-  a UI no fim da síntese (achado da auditoria).
-- `StatusRelay` (`@unchecked Sendable`, weak) leva o progresso da
-  thread de fundo à main sem estender a vida do controller.
+- **Mirroring the streamer (why it exists):** `currentSegmentText`
+  lives in `StreamingPlayer`, and the `objectWillChange` sink only
+  republishes the controller when `isPlaying`/`isPaused`/`status`
+  change — the highlight would freeze on the first sentence. Here
+  each streamer field has its own `sink` → the controller's
+  `@Published`. `volume` is a `didSet` → `streamer.volume`.
+- `fullText` (used as the **cache key** in `CacheDisco` and in the
+  duration estimate) joins the phrases with `" "`, with `"\n"` after
+  `phrase.paragraphEnd`. This invalidates old audio (without a pause)
+  **exactly once**; the published text of each phrase does not change.
+- The engine is chosen by the voice: `PiperTTS.isOfflineVoice(voice)`
+  → offline. The flow is the same (slice by slice, a single audio at
+  the end).
+- **Cancellation by generation:** each `play` increments
+  `synthGeneration`; the task checks `gen == synthGeneration` on the
+  main actor before every effect (streamer, `segments`, `status`,
+  `isBusy`) and the old task — even one stuck in a blocking `run` —
+  exits without writing anything. `cancelSynthesis` invalidates the
+  generation, signals a `CancelFlag` (an instance per generation: the
+  old task keeps reading `isCancelled == true` inside the blocking
+  `run`) and terminates the processes of both engines.
+- **`play`, in this order:** resumes a pause with the same key
+  (`status.playing`); a pause with the synthesis of the same reading
+  in flight (`synthKeyInFlight`) resumes the streamer and the rest
+  engages on arrival — `status.playingWhileSynthesizing` or
+  `status.generatingNext` (before, it fell into the no-op and Play
+  looked dead; an audit finding); a repeated play of the same reading
+  in flight does not start a second synthesis; a synthesis in course
+  with ANOTHER text cancels first.
+- **`pendingJumpIndex` (click before audio):** `jumpToSegment`
+  without audio stores the index as pending instead of ignoring it;
+  each arriving slice tries the jump (`retryPendingJump`), so the
+  click "plays from there" as soon as the passage exists. The pending
+  jump dies with the synthesis (cancel, end or error) — without this,
+  an earlier click would fire by itself in a future reading.
+- **A click with no audio at all starts synthesis FROM the clicked
+  sentence** (`ContentView.clickToPlay`): `Array(lista[pos...])` —
+  with the whole list, the beginning of the document played before
+  the chunk of the clicked passage existed.
+- `discardTranscription` exists because `play` reuses audio when the
+  key does not change: without clearing audio, segments, phrases, the
+  current key and the `CacheDisco` entry (including the in-flight
+  key, when different), switching text mode and pressing play would
+  resume the old reading.
+- **Resolvable status:** catalog messages store `statusKey` +
+  `statusArgs`; on a language change, `refreshLocale` re-resolves.
+  Raw motor progress (`recebeProgresso`) clears the key — a motor
+  message stays in the source language, and the switch would not
+  overwrite it.
+- Duration estimate: `chars/700` (measured: 1391 chars/s in PT, 26k
+  chars; the pessimistic estimate keeps the real wait from looking
+  like a freeze).
+- `exportMP3`: the final file is already at hand — it only copies
+  with the right extension (WAV offline, MP3 online) via `NSSavePanel`.
+- **The cache is saved off the main actor** (`Task.detached(.utility)`):
+  copying the final MP3/WAV inside the `MainActor.run` block froze the
+  UI at the end of synthesis (an audit finding).
+- `StatusRelay` (`@unchecked Sendable`, weak) carries progress from
+  the background thread to the main actor without extending the
+  controller's lifetime.
 
-## 5) Importação — `TextImport.swift`, `PdfWords.swift`, `PDFTextExtractor.swift`
+### Import — `TextImport.swift`, `PdfWords.swift`, `PDFTextExtractor.swift`
 
 `TextImport.Phrase` — `Hashable, Sendable`:
 
 ```swift
 struct Phrase: Hashable, Sendable {
     struct WordBox: Hashable, Sendable { let text: String; let rect: CGRect }
-    let index: Int           // índice global estável na lista ativa
+    let index: Int           // stable global index in the active list
     let text: String
-    let page: Int?           // 0-based; nil para texto sem PDF
-    let rects: [CGRect]      // caixas das LINHAS da frase (não do parágrafo)
-    let words: [WordBox]     // palavras do parágrafo inteiro (o karaokê casa por texto)
-    let paragraphEnd: Bool   // true só na última frase de cada bloco/parágrafo
-    let notaNumero: Int?     // corpo de nota de rodapé (nil em texto corrido)
+    let page: Int?           // 0-based; nil for text without a PDF
+    let rects: [CGRect]      // boxes of the sentence's LINES (not the paragraph's)
+    let words: [WordBox]     // words of the whole paragraph (karaoke matches by text)
+    let paragraphEnd: Bool   // true only on the last sentence of each block/paragraph
+    let notaNumero: Int?     // footnote body (nil in running text)
 }
 ```
 
-- **Pipeline do PDF:** `PDFTextExtractor.extractSegments` (XY-cut,
-  seção 6) → corte de bibliografia + `ReadAloudFilter.clean` por
-  trecho (`filtered(_:isPDF:)`, preserva página/caixas/palavras) →
-  `makePhrases` (reparte por bloco e frase, atribui caixas) →
-  `resolveFootnotes` (liga corpos aos marcadores). Integral e
-  filtrado derivam da MESMA extração (`frases`/`frasesFiltradas`).
-- **`resolveFootnotes` — a decisão de índices como propriedade:**
-  número solto de 1–2 dígitos com página (rótulo sem corpo, como os
-  "1".."15" do artigo de teste) é **descartado** (lido, viraria
-  "um"); corpo (1–2 dígitos iniciais + espaço + ≥12 caracteres) é
-  movido para logo após a frase do marcador — marcador buscado na
-  mesma página (em ordem) e, faltando, no documento para trás
-  (cobre notas de fim); sem marcador, o corpo fica intacto (pode ser
-  data ou enumeração: mexer seria corrupção). O corpo perde o número
-  e ganha `notaNumero`. **Os índices das frases que ficam NÃO mudam**
-  (são propriedade, não posição) — destaque e salto por índice
-  continuam valendo após a resolução. A movimentação é de trás para
-  frente para não deslocar posições ainda por tratar.
-- `makePhrases` reparte cada segmento em frases **por bloco** (bloco
-  separado por newline) e marca `paragraphEnd` na última frase de
-  cada bloco.
-- `rects` são as caixas das **linhas da frase**: os tokens da frase
-  são casados em ordem contra as palavras do parágrafo (cursor
-  monotônico em `boxesForSentence`; token não achado é pulado sem
-  deslocar o cursor) e as caixas casadas são agrupadas por linha
-  (`groupByLine`: sobreposição vertical acima da metade da menor
-  altura; minX/minY/maxX/maxY por linha, ordenadas). Sem nenhum
-  casamento, a frase herda as caixas do parágrafo (`seg.rects`).
-  Frase que cruza a virada de página é partida em um trecho por
-  página (cada trecho com sua página e caixas); sem virada, um
-  trecho só.
-  `words` continua com as palavras do parágrafo — o karaokê casa por
-  texto, não por índice.
-- `editorPhrases(_:integral:)`: texto digitado/colado, mesma UMA
-  flag (integral ou `clean`).
-- Entrada: `.pdf` (script PyMuPDF, com reserva PDFKit), `.md`/`.txt`
-  (`normalizeMarkdown`: cercas, links, marcação de linha, inline).
-  PDF sem camada de geometria cai para o texto bruto por página;
-  sem texto nenhum, erro honesto ("PDF sem camada de texto").
-- `splitSentences`: pontuação terminal seguida de maiúscula/dígito/
-  abre-parêntese/aspa (regex com lookbehind).
-- `PdfWords.lines(pdfURL:pageCount:)` roda `pdf_extract.py` e devolve
-  por linha `[(texto, caixa, words: [(texto, caixa)])]` em
-  **coordenadas de página PDFKit** (origem canto inferior esquerdo —
-  o mesmo sistema dos `rects`; o script converte `[x0, h-y1, x1,
-  h-y0]`). JSON antigo sem `words` continua decodificando (campo
-  opcional); palavra com caixa inválida é descartada. Prazo:
-  `min(180, 15 + 3×páginas)`. `pythonWithFitz` sonda (com cache) o
-  venv de suporte, `EdgeTTS.pythonPath`, o venv do Piper, homebrew e
-  `/usr/bin/python3`, aceitando só o que importa `fitz`; sem nenhum,
-  devolve nil e o chamador usa a via PDFKit.
-- `PDFTextExtractor.extractSegments` devolve
-  `[(text, page, rects, words)]`; as `words` do parágrafo são a
-  concatenação, na ordem de leitura, das palavras das linhas que
-  estão na página da frase (`flush` filtra por `page == currentPage`).
-  A via PDFKit (reserva) não tem palavras.
+- **The PDF pipeline:** `PDFTextExtractor.extractSegments` (XY-cut,
+  the section below) → bibliography cut + `ReadAloudFilter.clean` per
+  passage (`filtered(_:isPDF:)`, preserving page/boxes/words) →
+  `makePhrases` (splits by block and sentence, assigns boxes) →
+  `resolveFootnotes` (links bodies to markers). Full and filtered
+  derive from the SAME extraction (`frases`/`frasesFiltradas`).
+- **`resolveFootnotes` — indices as a property:** a loose 1–2 digit
+  number with a page (a label without a body, like the "1".."15" of
+  the test article) is **discarded** (read, it would become "one");
+  a body (1–2 starting digits + space + ≥12 characters) is moved to
+  right after the marker's sentence — the marker is searched on the
+  same page (in order) and, failing that, backwards through the
+  document (covers endnotes); without a marker, the body stays intact
+  (it could be a date or an enumeration: touching it would be
+  corruption). The body loses its number and gains `notaNumero`.
+  **The indices of the sentences that remain do NOT change** (they
+  are property, not position) — highlighting and jumping by index
+  keep working after resolution. The move runs backwards so positions
+  still to be processed are not shifted.
+- `makePhrases` splits each segment into sentences **by block** (a
+  block is separated by a newline) and marks `paragraphEnd` on the
+  last sentence of each block.
+- `rects` are the sentence's **line boxes**: the sentence's tokens
+  are matched in order against the paragraph's words (a monotonic
+  cursor in `boxesForSentence`; a token not found is skipped without
+  shifting the cursor) and the matched boxes are grouped by line
+  (`groupByLine`: vertical overlap above half the smallest height;
+  minX/minY/maxX/maxY per line, ordered). With no match at all, the
+  sentence inherits the paragraph's boxes (`seg.rects`). A sentence
+  crossing a page break is split into one passage per page (each with
+  its page and boxes); without a break, a single passage. `words`
+  keeps the whole paragraph's words — karaoke matches by text, not by
+  index.
+- `editorPhrases(_:integral:)`: typed/pasted text, the same single
+  flag (full or `clean`).
+- Input: `.pdf` (the PyMuPDF script, with a PDFKit reserve),
+  `.md`/`.txt` (`normalizeMarkdown`: fences, links, line markup,
+  inline). A PDF without a geometry layer falls back to raw text per
+  page; with no text at all, an honest error ("PDF without a text
+  layer").
+- `splitSentences`: terminal punctuation followed by
+  uppercase/digit/open-paren/quote (regex with lookbehind).
+- `PdfWords.lines(pdfURL:pageCount:)` runs `pdf_extract.py` and
+  returns per line `[(text, box, words: [(text, box)])]` in
+  **PDFKit page coordinates** (origin at the bottom-left — the same
+  coordinate system as the `rects`; the script converts
+  `[x0, h-y1, x1, h-y0]`). Old JSON without `words` still decodes
+  (optional field); a word with an invalid box is discarded. Deadline:
+  `min(180, 15 + 3×pages)`. `pythonWithFitz` probes (with cache) the
+  support venv, `EdgeTTS.pythonPath`, the Piper venv, homebrew and
+  `/usr/bin/python3`, accepting only what imports `fitz`; with none,
+  it returns nil and the caller uses the PDFKit path.
+- `PDFTextExtractor.extractSegments` returns `[(text, page, rects,
+  words)]`; the paragraph's `words` are the concatenation, in reading
+  order, of the words of the lines that are on the sentence's page
+  (`flush` filters by `page == currentPage`). The PDFKit path
+  (reserve) has no words.
 
-## 6) `Sources/EdgeSpeak/PDFTextExtractor.swift` — ordem de leitura (XY-cut)
+### `PDFTextExtractor.swift` — reading order (XY-cut)
 
-- **Por que existe:** `PDFPage.string` devolve texto linha a linha na
-  ordem de impressão — em páginas de **duas colunas** ela alterna
-  esquerda/direita e embaralha o texto. Aqui cada linha vem com sua
-  caixa e a ordem é reconstruída por **corte recursivo (XY-cut)**:
-  separa pela maior calha **vertical primeiro** (colunas), depois
-  horizontal (faixas), até não haver calha. A escolha pela vertical
-  primeiro é o que faz uma página de duas colunas ser lida coluna
-  inteira da esquerda, depois a da direita; um título de largura
-  total "costura" a calha e força o corte horizontal antes.
-- Corte vertical exige calha limpa (nenhuma linha a cruza), mínimo
-  `max(12, leading)` e **≥3 linhas de cada lado** — uma heurística
-  fraca não corta uma página de coluna única.
-- Cabeçalhos/rodapés: `repeatedKeys` (mesmo texto normalizado —
-  blocos de dígitos viram `#` — em ≥3 linhas de ≥3 páginas) e
-  `isMarginNoise` (faixas 14% superior/86% inferior da página:
-  número de página, data, URL, etiqueta ≤12 caracteres).
-- Parágrafos (`paragraphs`): entrelinha mediano por página; continua
-  enquanto a linha anterior NÃO fechou frase, encheu a coluna
-  (≥82% da largura da coluna, não da página — `colLeft`/`colRight`
-  do XY-cut), o vão é < 1,6×leading e a linha não é recuada
-  (>0,8×leading); título (caixa >1,18× a altura mediana) fecha
-  parágrafo; quebra de página continua se a frase não fechou; na
-  virada de coluna (vano negativo) decide "linha cheia + fim de
-  frase", que é o fluxo correto entre colunas. Hífen de fim de linha
-  é consumido na junção.
-- Vias de entrada: **PyMuPDF primeiro** (`PdfWords.lines`; contagem
-  de páginas tem que bater, senão cai para PDFKit) — a camada de
-  texto de alguns PDFs não tem espaços entre palavras e o PyMuPDF
-  segmenta em palavras com caixas; **PDFKit como reserva** (sem
-  Python ou sem PyMuPDF), ordenando linhas topo→base por geometria.
-- Índice de nota em sobrescrito (`[⁰¹²³⁴⁵⁶⁷⁸⁹]+`) é tirado ANTES de
-  tudo: colado no fim da linha, esconde a pontuação e a nota de
-  rodapé seria emendada no parágrafo anterior.
+- **Why it exists:** `PDFPage.string` returns text line by line in
+  print order — on **two-column** pages it alternates left/right and
+  scrambles the text. Here each line comes with its box and the order
+  is rebuilt by **recursive cutting (XY-cut)**: it separates by the
+  largest **vertical** gutter first (columns), then horizontal
+  (bands), until no gutter remains. Choosing vertical first is what
+  makes a two-column page read as one whole column from the left,
+  then the right; a full-width title "stitches" the gutter and forces
+  a horizontal cut first.
+- A vertical cut requires a clean gutter (no line crosses it), a
+  minimum of `max(12, leading)` and **≥3 lines on each side** — a
+  weak heuristic does not cut a single-column page.
+- Headers/footers: `repeatedKeys` (the same normalized text — digit
+  blocks become `#` — on ≥3 lines of ≥3 pages) and `isMarginNoise`
+  (bands at the top 14%/bottom 86% of the page: page number, date,
+  URL, a label ≤12 characters).
+- Paragraphs (`paragraphs`): median leading per page; a line continues
+  while the previous one did NOT close a sentence, filled the column
+  (≥82% of the column width, not the page — `colLeft`/`colRight` from
+  the XY-cut), the gap is < 1.6×leading and the line is not indented
+  (>0.8×leading); a title (box >1.18× the median height) closes a
+  paragraph; a page break continues if the sentence did not close; at
+  a column turn (a negative gap) it decides "full line + sentence
+  end", which is the correct flow between columns. A line-end hyphen
+  is consumed on the join.
+- Input paths: **PyMuPDF first** (`PdfWords.lines`; the page count
+  must match, else it falls back to PDFKit) — the text layer of some
+  PDFs has no spaces between words and PyMuPDF segments into words
+  with boxes; **PDFKit as the reserve** (without Python or PyMuPDF),
+  ordering lines top→bottom by geometry.
+- A superscript footnote index (`[⁰¹²³⁴⁵⁶⁷⁸⁹]+`) is stripped BEFORE
+  everything: glued to the end of a line, it hides the punctuation and
+  the footnote would be glued to the previous paragraph.
 
-## 7) `Sources/EdgeSpeak/ReadAloudFilter.swift` — o que a voz lê
+### `ReadAloudFilter.swift` — what the voice reads
 
-O maior arquivo (45k). Duas vias que **nunca se misturam**:
-`clean` (texto exibido/transcrito) e `forSpeech` (texto do
-motor). Contrato travado por teste (`falaNaoAlteraExibicao`):
-`forSpeech` expande notação; `clean` nunca insere palavra falada.
+The largest file (45k). Two paths that **never mix**: `clean`
+(displayed/transcribed text) and `forSpeech` (motor text). The
+contract is locked by a test (`falaNaoAlteraExibicao`): `forSpeech`
+expands notation; `clean` never inserts a spoken word.
 
-- `clean(_:isPDF:)`: NFKC → tira sobrescrito de nota →
-  `stripPDFArtifacts` (cabeçalhos/rodapés repetidos, paginação,
-  datas partidas, hifenização — **antes** do reflow, porque a
-  quebra de linha é a evidência da hifenização) → `reflow` (reagrupa
-  linhas quebradas) → `stripQuotedBlocks` (citação entre aspas — o
-  `.` NÃO atravessa quebra de linha de propósito; versão antiga
-  apagava seções inteiras; bibliografia na metade final; notas
-  soltas de asterisco) → regras de apparatus em ordem (chamadas de
-  nota, notas entre colchetes, "nota N", paginação em parênteses
-  ANTES da solta — senão sobra `)` órfão, referências cruzadas com
-  guarda de palavra isolada — "veremos" não é "ver", títulos de
-  seção ficam de propósito, `ibid.`/`et al.`, `§N`, "Page N of M",
-  citações autor-ano com ano de 4 dígitos, linhas de fórmula,
-  fórmulas inteiras operando-símbolo-operando, `$…$`/`\(...\)`,
-  URLs) → limpeza final (linhas só de pontuação, espaços duplos,
-  pontuação órfã).
-- **Por que o reflow critera pela LARGURA (85% do percentil 75) e
-  não por "começa com minúscula":** numa frase justificada todas as
-  linhas chegam perto da margem e só a última é curta; juntar por
-  minúscula deixava solta toda quebra antes de nome próprio. A
-  largura salva as quebras de página (linha curta no meio do
-  parágrafo) e o "anterior cheia" salva a quebra antes de nome
-  próprio.
-- `forSpeech(_:voice:lêNotas:)` (o que o motor recebe): blackboard-
-  bold **antes do NFKC** (`foldaveis`: o NFKC funde ℕ com N — a
-  tabela de regex já os receberia mortos) → `expandAbbreviations` →
-  `spellOutYears` (só PT: anos 1500–2100 por extenso; em inglês o
-  motor já lê sozinho) → `expandLogic` → `expandFootnoteMarkers`
-  (anuncia o marcador colado, a menos que `lêNotas == false`) →
-  colapso de espaços/vírgulas duplicadas.
-- **Decisões de verbalização (baseadas no levantamento em
+- `clean(_:isPDF:)`: NFKC → strip footnote superscript →
+  `stripPDFArtifacts` (repeated headers/footers, pagination, split
+  dates, hyphenation — **before** the reflow, because the line break
+  is the evidence of hyphenation) → `reflow` (regroups broken lines)
+  → `stripQuotedBlocks` (a quotation in quotes — the `.` does NOT
+  cross a line break on purpose; the old version erased whole
+  sections; the bibliography in the second half; loose asterisk
+  notes) → apparatus rules in order (footnote calls, bracketed notes,
+  "note N", pagination in parentheses BEFORE the loose one — else an
+  orphan `)` remains, cross-references with a lone-word guard — "we
+  will see" is not "see", section titles stay on purpose,
+  `ibid.`/`et al.`, `§N`, "Page N of M", author-year citations with
+  a 4-digit year, formula lines, whole formulas as
+  operand-symbol-operand, `$…$`/`\(...\)`, URLs) → final cleanup
+  (lines of punctuation only, double spaces, orphan punctuation).
+- **Why the reflow judges by WIDTH (85% of the 75th percentile) and
+  not by "starts lowercase":** in a justified sentence all lines
+  arrive near the margin and only the last is short; joining by
+  lowercase left every break before a proper name loose. The width
+  saves page breaks (a short line in the middle of a paragraph) and
+  "the previous one is full" saves the break before a proper name.
+- `forSpeech(_:voice:lêNotas:)` (what the motor receives):
+  blackboard-bold **before NFKC** (`foldaveis`: NFKC fuses ℕ with N —
+  the regex table would receive them dead) → `expandAbbreviations` →
+  `spellOutYears` (PT only: years 1500–2100 spelled out; in English
+  the motor reads them alone) → `expandLogic` → `expandFootnoteMarkers`
+  (announces the glued marker, unless `lêNotas == false`) → collapse
+  of duplicate spaces/commas.
+- **Verbalization decisions (based on the survey in
   `docs/pesquisas/logica-leitura.md`):**
-  - Quantificadores com variável e vírgula prosódica ("para todo
-    x,"), modais □ ◇, turnos ⊢ ⊨ com pausa curta antes/depois,
-    negações ⊬ ⊭, ASCII `|-` `|=` `->` `=>` `<->`.
-  - Conjuntos ∈ ∉ ⊆ ∪ ∩ ∖ ∅ ℘, construtor `{x | φ}`/`{x : φ}`
-    (`expandSetBuilder`: só entra o que tem marcador de "tal que"
-    dentro das chaves; sem ele, `{…}` é agrupamento e vira
-    silêncio; a chave que fecha é SILÊNCIO — pausa de fim de
-    enumeração).
-  - **Ferradura ⊃ por contexto** (`resolveHorseshoe`, janela de 12
-    caracteres dos dois lados): perto de ∈/⊆/∪/∩/∅ é superconjunto;
-    perto de ¬/∧/∨/⊢ (e por padrão) é condicional. Heurística por
-    natureza — na dúvida o padrão histórico é "implica".
-  - Gregas pelo nome (φ "fi", λ — cujo ponto vira PAUSA, nunca
-    "dot" —, Γ…), iota ℩ ("o x tal que"), blackboard-bold, cantos de
-    Quine (silêncio com pausa de menção), primos p′ ("p linha", só
-    token isolado — "it's" e "O'Brien" não viram), §2 ("seção 2"),
-    functores ("T de u, o" — só MAIÚSCULA sozinha), R_H ("R H").
-  - **Silêncio deliberado** (nunca verbalizar em prosa comum):
-    `[]`/`<>` como modal (colchete já vira pausa no `clean`; `<>`
-    é o "diferente" ASCII), `x` de "3 x 4" como vezes (só × próprio
-    lê "vezes"), barra solta fora de construtor (entre letras lê
-    "ou", com guarda contra "and/or"), chave de agrupamento, `^`
-    entre letras/dígitos (sobrescreve como espaço), `~` vs `∼`
-    (no início ou após `)`/`,` é negação; entre termos, semelhança).
-  - ⊥/⊤: "falso"/"verdadeiro" em PT (aula brasileira); EN mantém
+  - Quantifiers with a variable and a prosodic comma ("para todo
+    x,"), modals □ ◇, turnstiles ⊢ ⊨ with a short pause before and
+    after, negations ⊬ ⊭, ASCII `|-` `|=` `->` `=>` `<->`.
+  - Sets ∈ ∉ ⊆ ∪ ∩ ∖ ∅ ℘, set-builder `{x | φ}`/`{x : φ}`
+    (`expandSetBuilder`: only enters what has a "such that" marker
+    inside the braces; without it, `{…}` is grouping and becomes
+    silence; the closing brace is SILENCE — an end-of-enumeration
+    pause).
+  - **Horseshoe ⊃ by context** (`resolveHorseshoe`, a 12-character
+    window on both sides): near ∈/⊆/∪/∩/∅ it is a superset; near
+    ¬/∧/∨/⊢ (and by default) it is a conditional. A heuristic by
+    nature — in doubt, the historical default is "implies".
+  - Greek by name (φ "fi", λ — whose dot becomes a PAUSE, never
+    "dot" —, Γ…), iota ℩ ("the x such that"), blackboard-bold, Quine
+    corners (silence with a mention pause), primes p′ ("p prime",
+    only an isolated token — "it's" and "O'Brien" do not change),
+    §2 ("section 2"), functors ("T of u, o" — only a lone CAPITAL),
+    R_H ("R H").
+  - **Deliberate silence** (never verbalized in ordinary prose):
+    `[]`/`<>` as a modal (a bracket already becomes a pause in
+    `clean`; `<>` is ASCII "not equal"), the `x` of "3 x 4" as times
+    (only a proper × reads "times"), a lone bar outside a
+    set-builder (between letters it reads "or", with a guard against
+    "and/or"), a grouping brace, `^` between letters/digits (a
+    superscript reads as a space), `~` vs `∼` (at the start or after
+    `)`/`,` it is negation; between terms, similarity).
+  - ⊥/⊤: "false"/"true" in PT (a Brazilian classroom); EN keeps
     bottom/top.
-- `expandFootnoteMarkers`: o marcador colado vira "nota de rodapé
-  N"/"footnote N" (texto do catálogo `L`, fonte única nos dois
-  idiomas). **Por que textual e não geométrico:** o `clean` já remove
-  o sobrescrito Unicode antes de repartir as frases, então o que
-  chega ao `forSpeech` é o dígito ASCII colado. Guardas fortes: só
-  1–2 dígitos (nunca 4, para não morder anos 1500–2100 que
-  `spellOutYears` trata), dígito seguinte não pode ser letra/dígito/
-  ponto (protege "3.14", "3,14", "4.2.1", "7z"), ponto/vírgula
-  exigem letra ou fecho antes (protegem "9 Oct", "Figura 7"); colado
-  curto ("mp3") é sigla e fica como está. Com `lêNotas: false`, o
-  marcador vira vírgula (pausa), sem anúncio.
+- `expandFootnoteMarkers`: the glued marker becomes "nota de rodapé
+  N"/"footnote N" (catalog text `L`, a single source in both
+  languages). **Why textual and not geometric:** `clean` already
+  removes the Unicode superscript before splitting sentences, so what
+  reaches `forSpeech` is the glued ASCII digit. Strong guards: only
+  1–2 digits (never 4, so as not to bite the years 1500–2100 that
+  `spellOutYears` handles), the following digit cannot be a
+  letter/digit/dot (protects "3.14", "3,14", "4.2.1", "7z"), a
+  dot/semicolon requires a letter or a closing mark before (protects
+  "9 Oct", "Figure 7"); a short glued string ("mp3") is an acronym
+  and stays as is. With `lêNotas: false`, the marker becomes a comma
+  (a pause), without an announcement.
 
-## 8) `Sources/EdgeSpeak/WordAligner.swift` — karaokê palavra a palavra
+### `WordAligner.swift` — word-by-word karaoke
 
-`@MainActor final class WordAligner`. Alinha a sequência de palavras
-**FALADAS** com a sequência de palavras do PDF e diz qual caixa
-corresponde a cada palavra falada.
+`@MainActor final class WordAligner`. Aligns the sequence of words
+**SPOKEN** with the sequence of words of the PDF and says which box
+corresponds to each spoken word.
 
-- **Por que alinhar e não procurar palavra a palavra:** a leitura em
-  voz alta NUNCA tem a mesma sequência de palavras do PDF. Onde o
-  PDF põe um símbolo, a voz põe uma frase — "∃uT (u,o)" vira "there
-  exists u, such that, T of u" (11 palavras para 3 caixas). Procurar
-  palavra a palavra obrigava as palavras de expansão a casar com
-  alguma caixa, e como são palavras COMUNS ("and", "such", "there"),
-  roubavam a caixa de uma palavra de prosa logo adiante: era o
-  "amarelo pulando de lado a lado" que o dono viu.
-- **Por que alinhamento global (Needleman–Wunsch) e não guloso:** o
-  guloso resolve o caso comum mas quebra justamente onde o
-  comprimento das sequências difere por construção. O global prefere
-  deixar a palavra de expansão **SEM caixa** a distorcer o resto,
-  porque distorcer custa mais caro.
-- Custos: casar iguais = 0 **menos bônus de contexto** (±3 vizinhas
-  iguais, até 3 por lado, só vizinha com letra ou dígito); pular =
-  1; trocar (par diferente) = 3 — mais caro que pular porque trocar
-  distorce a sequência. **Por que ±3 e não ±1:** a frase é lida
-  contra as palavras do PARÁGRAFO inteiro e a frase seguinte pode
-  repetir o mesmo bigrama; com ±1 o backtrace a partir do fim
-  preferia a ocorrência tardia e o amarelo ia para a frase seguinte
-  (caso medido no artigo de teste: "the laboratory" em duas frases).
-  O bônus só vale para o par igual, então expansão continua sem
-  caixa.
-- Desempate do backtrace: empate vai para CASAR (mantém "the … the"
-  na ocorrência certa), depois pular palavra falada (expansão),
-  depois pular caixa do PDF.
-- `normalizada(_:)`: minúsculas, só letras e dígitos (mesma regra
-  do karaokê do painel e do casamento de tokens).
-- **Cache por frase** (`caixa(frase:alvo:faladas:pdf:)`): o
-  alinhamento é O(n·m) e o destaque tica a 10 Hz — recomputa só
-  quando a frase ou as contagens mudam; repetir o pedido devolve a
-  mesma caixa.
-- `caixa(alinhado:alvo:pdf:)` devolve a caixa do alvo; alvo fora da
-  lista devolve nil (nunca uma caixa vizinha inventada).
+- **Why align and not search word by word:** the aloud reading NEVER
+  has the same word sequence as the PDF. Where the PDF puts a symbol,
+  the voice puts a phrase — "∃uT (u,o)" becomes "there exists u, such
+  that, T of u" (11 words for 3 boxes). Searching word by word
+  forced the expansion words to match some box, and since they are
+  COMMON words ("and", "such", "there"), they stole the box of a
+  prose word right after: that was the "yellow jumping side to side"
+  the owner saw.
+- **Why a global alignment (Needleman–Wunsch) and not a greedy
+  one:** the greedy one solves the common case but breaks exactly
+  where the sequence lengths differ by construction. The global one
+  prefers to leave an expansion word **without a box** rather than
+  distort the rest, because distorting costs more.
+- Costs: matching equal = 0 **minus a context bonus** (±3 neighbors
+  equal, up to 3 per side, only neighbors with a letter or a digit);
+  skipping = 1; substituting (a different pair) = 3 — more expensive
+  than skipping because substituting distorts the sequence. **Why ±3
+  and not ±1:** the phrase is read against the words of the WHOLE
+  paragraph and the next phrase can repeat the same bigram; with ±1
+  the backtrace from the end preferred the late occurrence and the
+  yellow went to the next phrase (a measured case in the test
+  article: "the laboratory" in two phrases). The bonus only applies
+  to an equal pair, so an expansion stays boxless.
+- Backtrace tie-breaking: a tie goes to MATCH (keeps "the … the" at
+  the right occurrence), then skip the spoken word (expansion), then
+  skip the PDF box.
+- `normalizada(_:)`: lowercase, letters and digits only (the same
+  rule as the panel karaoke and the token matching).
+- **Per-sentence cache** (`caixa(frase:alvo:faladas:pdf:)`): the
+  alignment is O(n·m) and the highlight ticks at 10 Hz — it
+  recomputes only when the sentence or the counts change; a repeated
+  request returns the same box.
+- `caixa(alinhado:alvo:pdf:)` returns the box of the target; a
+  target outside the list returns nil (never an invented neighboring
+  box).
 
-## 9) `Sources/EdgeSpeak/PhraseLocator.swift` — clique → frase
+### `PhraseLocator.swift` — click → sentence
 
-Ideia de navegação por frase inspirada no PDFVoice (MIT) — só a
-ideia, algoritmo reescrito do zero (CREDITS.md). Contenção vence;
-senão o retângulo mais próximo até `maxDistance = 40` pt; frases
-sem `rects` são ignoradas; só a mesma página; margem devolve nil.
-Distância euclidiana ponto→retângulo (0 quando dentro).
+Sentence navigation, implemented here from scratch. Containment
+wins; otherwise the nearest rectangle up to `maxDistance = 40` pt;
+phrases without `rects` are ignored; same page only; the margin
+returns nil. Euclidean point→rectangle distance (0 when inside).
 
-## 10) `Sources/EdgeSpeak/BundledEnv.swift` — ambiente Python embutido
+### `BundledEnv.swift` — embedded Python environment
 
-`enum BundledEnv`. O app funciona num Mac virgem (só macOS 14+ arm64
-+ rede), sem o Python do sistema nem os venvs do dono.
+`enum BundledEnv`. The app works on a virgin Mac (only macOS 14+
+arm64 + network), without the system Python or the owner's venvs.
 
-- `ensure(progress:)`: idempotente e **serializado** (`setupLock` —
-  duas chamadas juntas preparam uma vez só; re-checa após esperar).
-  Passos: probe `importsOK` (`-c "import edge_tts, fitz, piper"`)
-  → cria `venv` a partir da **base embutida** (`Resources/pythonbase`
-  no bundle; reserva de dev: `Build/staging`, `Resources`) →
-  `ensurepip` se a base vier sem pip (completa DENTRO do venv, sem
-  tocar na base) → `pip install --no-index --find-links <wheels>`
-  (edge-tts, pymupdf, piper-tts — instalação SEM rede) → aplica
-  `patch_edge_tts.py` no site-packages → verifica de novo. Erros em
-  pt-BR para a UI (`NSError` com `NSLocalizedDescriptionKey`).
-- `readyPython()`: caminho quente sem probe — vale quando `ensure`
-  já passou nesta execução (`readyCache` sob `stateLock`) E o
-  binário é executável.
-- `pickPython(support:supportValid:legacy:)`: pura (a ordem do
-  probe num lugar só, testável).
-- `sitePackages(in:)`: pura no sistema de arquivos (testável com
-  diretório fake); descobre `lib/python*/site-packages`.
-- `runSync`: processo bloqueante com timeout (300/900/120 s por
-  etapa), stderr em arquivo temporário (sem risco de deadlock de
-  pipe), encerra ao estourar o prazo.
-- **Por que o `ContentView` pré-aquece em `onAppear`**
-  (`Task.detached(.background)`): quando o usuário pedir a leitura,
-  o `ensure` já passou (ou roda então, com progresso no status).
+- `ensure(progress:)`: idempotent and **serialized** (`setupLock` —
+  two calls together prepare once; re-checks after waiting). Steps:
+  probe `importsOK` (`-c "import edge_tts, fitz, piper"`) → create a
+  venv from the **embedded base** (`Resources/pythonbase` in the
+  bundle; dev reserve: `Build/staging`, `Resources`) → `ensurepip`
+  if the base comes without pip (completes INSIDE the venv, without
+  touching the base) → `pip install --no-index --find-links <wheels>`
+  (edge-tts, pymupdf, piper-tts — installation WITHOUT a network) →
+  apply `patch_edge_tts.py` to site-packages → verify again. Errors
+  in pt-BR for the UI (`NSError` with `NSLocalizedDescriptionKey`).
+- `readyPython()`: a hot path without a probe — valid when `ensure`
+  has already passed in this run (`readyCache` under `stateLock`)
+  AND the binary is executable.
+- `pickPython(support:supportValid:legacy:)`: pure (the probe order
+  in one place, testable).
+- `sitePackages(in:)`: pure on the filesystem (testable with a fake
+  directory); discovers `lib/python*/site-packages`.
+- `runSync`: a blocking process with a timeout (300/900/120 s per
+  step), stderr to a temp file (no pipe-deadlock risk), terminated
+  when the deadline passes.
+- **Why `ContentView` preheats in `onAppear`**
+  (`Task.detached(.background)`): when the user asks for a reading,
+  `ensure` has already passed (or runs then, with progress in the
+  status).
 
-## 11) `Sources/EdgeSpeak/CacheDisco.swift` — cache em disco da síntese
+### `CacheDisco.swift` — on-disk synthesis cache
 
-`enum CacheDisco`, sem estado. Guarda o áudio final (MP3 online, WAV
-offline — a extensão segue o arquivo real; `lookup` aceita qualquer
-um dos dois) + os segmentos globais, em `Caches/EdgeSpeak/<chave>/`.
+`enum CacheDisco`, stateless. Stores the final audio (MP3 online, WAV
+offline — the extension follows the real file; `lookup` accepts
+either) and the global segments, in `Caches/EdgeSpeak/<key>/`.
 
 ```swift
 static func key(text: String, voice: String, rate: EdgeTTS.Rate, lêNotas: Bool = true) -> String
-static func lookup(key: String) -> Hit?          // áudio + segmentos, ou nil
+static func lookup(key: String) -> Hit?          // audio + segments, or nil
 static func store(key: String, audioURL: URL, segments: [EdgeTTS.Segment])
-static func remove(key: String)                  // apaga a entrada inteira
+static func remove(key: String)                  // deletes the whole entry
 ```
 
-- Chave: SHA-256 de `"v3|<voz>|<percent>|[sem-notas|]<texto>"`. O
-  prefixo `v3` é a geração do repartidor de frases: mesma matéria,
-  repartidor novo = índices novos — sem a geração na chave, um
-  cache antigo serviria segmentos com índices de outra numeração
-  (antes, `v2` invalidava o cache anterior ao karaokê, cujos
-  segmentos não têm `words`). `lêNotas` entra na chave (áudio com e
-  sem notas é diferente); com o default, a matéria-prima é idêntica
-  à de antes — nenhum cache antigo é invalidado.
-- Poda automática a cada `store` (no máximo 1×/min, em
-  `Task.detached(.background)`): saem entradas com mais de 30 dias e,
-  acima de 2 GB, as mais antigas primeiro. **Nunca** toca na chave
-  em uso nem em entradas gravadas há menos de 60 s (margem que
-  protege a leitura corrente). Falha em silêncio — cache é
-  otimização, não pode quebrar a leitura. `store` com falha apaga a
-  pasta que começou a escrever.
+- Key: SHA-256 of `"v3|<voice>|<percent>|[no-notes|]<text>"`. The
+  `v3` prefix is the generation of the phrase splitter: the same
+  material with a new splitter = new indices — without the generation
+  in the key, an old cache would serve segments with indices from
+  another numbering (before, `v2` invalidated the karaoke cache,
+  whose segments have no `words`). `lêNotas` enters the key (audio
+  with and without notes is different); with the default, the raw
+  material is identical to before — no old cache is invalidated.
+- Automatic pruning at every `store` (at most 1×/min, in
+  `Task.detached(.background)`): entries older than 30 days leave,
+  and above 2 GB the oldest go first. **Never** touches the key in
+  use or entries written less than 60 s ago (a margin that protects
+  the current reading). It fails silently — a cache is an
+  optimization and must not break a reading. A failed `store` deletes
+  the folder it started writing.
 
-## 12) `Sources/EdgeSpeak/L10n.swift` — catálogo de textos PT/EN
+### `L10n.swift` — PT/EN text catalog
 
-`enum L`. Tabelas compiladas (`pt`, `en`), sem `Package.swift` novo
-nem dependência nova.
+`enum L`. Compiled tables (`pt`, `en`), without a new `Package.swift`
+or a new dependency.
 
-- `resolve(_:locale:args:tabelas:)`: cadeia de fallback — idioma
-  pedido → PT → a própria chave (nunca vazio). Interpolação
-  **posicional** (`{0}`, `{1}…`); marcador sem argumento passa
-  direto; argumento a mais não quebra a frase. `tabelas` é
-  parâmetro para testes cobrirem o fallback sem mexer no catálogo.
-- **`AppSetting.languageKey` ("appLanguage") e `languageDefault`
-  ("pt") moram AQUI** (extensão de `AppSetting`, fim do arquivo),
-  de propósito: a fase 1 do L10n não editava arquivo existente. É
-  a única chave de preferência fora de `AppSettings.swift` — quem
-  procurar todas as chaves em `AppSetting` deve lembrar desta.
-- O `SpeechController` guarda `statusKey`+`statusArgs` e
-  `refreshLocale` re-resolve na troca de idioma (o idioma é
-  `@AppStorage` lido por `ContentView`, `PlayerBar`, `SettingsView`
-  e pelo próprio controller via `UserDefaults`).
-- Completude travada por testes: chaves iguais nos dois idiomas,
-  marcadores `{n}` com mesma aridade, nenhum texto vazio, nenhum
-  `\(` de interpolação Swift no catálogo.
+- `resolve(_:locale:args:tabelas:)`: a fallback chain — requested
+  language → PT → the key itself (never empty). Positional
+  interpolation (`{0}`, `{1}`…); a marker without an argument passes
+  through; an extra argument does not break the sentence. `tabelas` is
+  a parameter so tests cover the fallback without touching the
+  catalog.
+- **`AppSetting.languageKey` ("appLanguage") and `languageDefault`
+  ("pt") live HERE** (an extension of `AppSetting`, at the end of the
+  file), on purpose: the L10n phase did not edit an existing file.
+  It is the only preference key outside `AppSettings.swift` — whoever
+  looks for all the keys in `AppSetting` must remember this one.
+- The `SpeechController` stores `statusKey`+`statusArgs` and
+  `refreshLocale` re-resolves on a language change (the language is
+  `@AppStorage` read by `ContentView`, `PlayerBar`, `SettingsView`
+  and by the controller itself via `UserDefaults`).
+- Completeness locked by tests: the same keys in both languages, `{n}`
+  markers with the same arity, no empty text, no `\(` Swift
+  interpolation in the catalog.
 
-## 13) `Sources/EdgeSpeak/AppSettings.swift` — preferências
+### `AppSettings.swift` — preferences
 
-`enum AppSetting` centraliza chaves e padrões, lidas por `@AppStorage`
-tanto na janela de Ajustes quanto na `ContentView` — sempre a mesma
-chave e o mesmo padrão, nunca uma string repetida à mão (salvo
-`languageKey`, ver seção 12).
+`enum AppSetting` centralizes keys and defaults, read by `@AppStorage`
+both in the Settings window and in `ContentView` — always the same key
+and the same default, never a string repeated by hand (except
+`languageKey`, see the L10n section).
 
 ```swift
-static let voiceKey = "voice"                // padrão "en-US-AndrewNeural"
-static let rateKey = "readingRatePercent"    // padrão 0 (o `percent` de EdgeTTS.Rate)
-static let followKey = "followReading"       // padrão true
-static let integralKey = "integralText"      // padrão false
-static let footnoteKey = "readFootnotes"     // padrão true (notas ligadas)
-static let fontKey = "fontSize"              // padrão 17; limites 12…42
+static let voiceKey = "voice"                // default "en-US-AndrewNeural"
+static let rateKey = "readingRatePercent"    // default 0 (the `percent` of EdgeTTS.Rate)
+static let followKey = "followReading"       // default true
+static let integralKey = "integralText"      // default false
+static let footnoteKey = "readFootnotes"     // default true (notes linked)
+static let fontKey = "fontSize"              // default 17; limits 12…42
 
-static let englishVoices / portugueseVoices   // catálogo online (verificado 2026-10-10)
-static let voiceLabels: [String: String]      // "Nome (país, gênero)"
-static func label(for voice: String) -> String  // offline via PiperTTS
-static func isKnown(_ voice: String) -> Bool    // a voz guardada ainda existe?
+static let englishVoices / portugueseVoices   // online catalog (verified 2026-10-10)
+static let voiceLabels: [String: String]      // "Name (country, gender)"
+func label(for voice: String) -> String  // offline via PiperTTS
+func isKnown(_ voice: String) -> Bool    // does the saved voice still exist?
 ```
 
-- Limites de fonte documentados: abaixo de 12 o texto fica ilegível;
-  acima de 42 a janela mínima deixa de caber.
-- Migração na `ContentView`: "pt-BR-ThalitaNeural" (só havia a
-  multilingual) é reescrita para "pt-BR-ThalitaMultilingualNeural";
-  voz órfã no catálogo cai no padrão — sem isso o `Picker` ficava
-  sem item selecionado e a síntese falharia.
+- Font limits documented: below 12 the text becomes illegible; above
+  42 the minimum window no longer fits.
+- Migration in `ContentView`: "pt-BR-ThalitaNeural" (only the
+  multilingual one existed) is rewritten to
+  "pt-BR-ThalitaMultilingualNeural"; an orphan voice falls back to
+  the default — without this the Picker would have no selected item
+  and the synthesis would fail.
+- `ReadingPositionStore` (in this file): per-document, per-voice
+  reading positions under the `readingPositions` UserDefaults key;
+  positions below 3 s are not saved, and resume is only suggested
+  when the saved position is within the measured duration.
 
-## 14) UI — `EdgeSpeakApp.swift`, `ContentView.swift`, `PlayerBar.swift`, `PDFDocumentView.swift`, `ClickableTextView.swift`, `SettingsView.swift`
+### UI — `EdgeSpeakApp.swift`, `ContentView.swift`, `PlayerBar.swift`, `PDFDocumentView.swift`, `ClickableTextView.swift`, `SettingsView.swift`
 
-`EdgeSpeakApp`: `WindowGroup("EdgeSpeak") { ContentView() }` com
-`AppDelegate` (abre PDFs/texto por duplo-clique ou arraste, posta
-`.edgeSpeakOpenFile`) mais a cena `Settings { SettingsView() }`
-(⌘,). A `ContentView` também aceita argumento de linha de comando e
-arraste sobre a janela (`.onDrop`).
+See section 1) for the full UI map. The decisions that cut across
+files: the fixed-type `Container` root (the toolbar survives shape
+changes), generation-scoped file loading, the AppKit attribute scope
+for panel colors, the sequential text cursor for panel karaoke, and
+the 4 pt click-vs-drag threshold in both clickable views.
 
-**Decisão de raiz — por que a janela é um `Container` de tipo
-fixo:** aplicar `.toolbar` direto ao conteúdo que troca de forma
-(vazio → editor → PDF → painel) recria a raiz da vista e a barra de
-ferramentas se perdia na transição — medido: sem PDF a barra
-aparecia (7 botões na árvore de acessibilidade), abrindo um PDF ela
-sumia. O `Container` (struct privada, tipo nunca trocado) dá à
-janela uma âncora de identidade estável; a barra sobrevive.
+### Tools (`Tools/`) — the 1:1 boundary with the Swift side
 
-`ContentView` (layout B2, sem NavigationSplitView):
-
-```
-Toolbar (Abrir | Voz | menu Opções)
-conteúdo (PDFDocumentView quando há PDF, senão editor ou painel de texto clicável)
-PlayerBar  ← flutuante, sempre visível
-```
-
-- O menu Opções traz "Seguir leitura" (só com PDF), fonte (±2,
-  padrão; ⌘-, ⌘+, ⌘0), "Gerar leitura nova" e "Ajustes…"
-  (`SettingsLink`). Ritmo, modo de texto e notas moram na janela de
-  Ajustes (seção 15), não no menu.
-- **Carregamento de arquivo por geração (`loadGeneration`):** a
-  extração do PDF roda em `Task.detached` (o processo Python espera
-  com `Thread.sleep` até 180 s — na main a UI congelava), com
-  escopo de segurança (`startAccessingSecurityScopedResource`) e
-  descarte do resultado atrasado se outro arquivo passou na frente.
-  Antes de trocar, `cancelSynthesis` + `stopPlayback` — o
-  `stopPlayback` sozinho deixa a tarefa de síntese viva e ela
-  voltaria a enfileirar áudio do documento velho.
-- Teclado por monitor `NSEvent.keyDown` (o `PDFView` é AppKit e
-  engole atalhos do SwiftUI): **Enter** = play/pausa sempre;
-  **Espaço** só fora do editor/PDF e **nunca durante `isBusy`**
-  (durante a síntese o espaço é ignorado — antes ele cancelava e
-  reiniciava a síntese, seguindo a regra do botão desabilitado);
-  **⌥← / ⌥→** = ±15 s. Modificadores são limpos de
-  `.capsLock/.numericPad/.function` antes da comparação. Espaço/⌥-
-  setas são guardados por tipo de `firstResponder` e por
-  `!controller.isBusy`.
-- Trilho, ±15 s e ⌥-setas chamam `onTransport` (barra) → incrementa
-  `revealToken` (a `ContentView` leva o PDF ao trecho mesmo com o
-  "Seguir leitura" desligado — navegação explícita).
-- `.onChange(of: integralMode)` → `handleIntegralModeChange()`:
-  descarta a transcrição corrente (`discardTranscription`) e, se
-  havia leitura em curso, reinicia com a lista nova; sem leitura, só
-  descarta (o próximo play já usa o modo novo). Não há laço: nem o
-  descarte nem o play mudam `integralMode`.
-- **Destaque do painel por índice global** (não por busca de texto):
-  frases repetidas destacariam a ocorrência errada sem isso. O
-  `AttributedString` usa **escopo AppKit de propósito**
-  (`appKit.foregroundColor`/`appKit.backgroundColor`): atributos em
-  escopo SwiftUI não têm par no `NSAttributedString` — o painel os
-  descartava e nada destacava. Base em `labelColor` (escuro/claro).
-  Karaokê palavra a palavra no painel: casamento por texto com cursor
-  sequencial (o texto falado expande anos/abreviaturas — índice
-  direto caía na palavra errada); palavra achada leva negrito +
-  fundo amarelo (α 0,75) + texto escuro — o amarelo do PDF, não o
-  azul do sistema: unifica o karaokê nas duas vistas (divergência
-  apontada pela auditoria; o escuro sobre amarelo lê bem nos dois
-  temas).
-- **Cache do texto atribuído por (frase, palavra):** a vista é
-  reavaliada a cada tique do progresso; reconstruir 45k letras do
-  zero em cada um saturava a main. Fora da leitura calcula direto;
-  durante a leitura escreve o cache assíncrono e devolve o valor.
-- `currentWordRect` (karaokê do PDF): só com PDF, só voz online
-  (`!PiperTTS.isOfflineVoice(controller.voiceInUse)`), índices
-  válidos e caixa casada via `WordAligner` (por texto normalizado,
-  nunca por índice) — palavra não achada vira ausência de realce,
-  nunca destaque errado.
-- `statusBanner`: faixa transitória (some em 4 s), permanente
-  durante a síntese (é progresso vivo), com porcentagem da síntese,
-  selo "sem destaque" (áudio sem segmentos) e selo de voz offline.
-- **`clickToPlay`:** o token de revelação leva o PDF ao trecho
-  clicado na hora; sem áudio nem síntese em curso, sintetiza A
-  PARTIR da frase clicada (`Array(lista[pos...])`) e tenta o pulo
-  (o controller guarda o pendente e retenta a cada fatia).
-- O estado de `wordAligner` é `@State` para sobreviver aos ciclos de
-  avaliação da vista — o amarelo não pode recomeçar do zero a cada
-  tique.
-
-`PlayerBar` — só o transporte, sem conhecer lista de frases nem voz:
-
-```swift
-struct PlayerBar: View {
-    @ObservedObject var controller: SpeechController
-    let textLength: Int
-    let canPlay: Bool
-    let onTogglePlay: () -> Void
-    let onTransport: () -> Void      // trilho arrastado ou ±15 s (leva o PDF ao trecho)
-}
-```
-
-- Botão central sempre `play.fill`/`pause.fill` (nunca `hourglass`):
-  durante a síntese ele fica desabilitado (evita segundo clique que
-  cancelaria e reiniciaria) mas mostra play, em vez de parecer
-  travado. `.disabled(!canPause && (!canPlay || controller.isBusy))`.
-- Botão esquerdo é **cancelar** a síntese (⌘.) durante `isBusy`,
-  **parar** a leitura quando há áudio.
-- Trilho: `dragValue` suspende o ponteiro durante o arrasto e é
-  **devolvido a nil ao soltar** (`DragGesture.onEnded`) — sem isso o
-  valor local ficava preso, `scrubPosition` (que prefere o ponteiro
-  ao player) congelava o tempo e o trilho pelo resto da sessão.
-- Volume 0…1 (aplicado ao player atual e aos seguintes, sem mexer no
-  volume do sistema); exportação só com áudio e sem síntese.
-
-`PDFDocumentView` — `NSViewRepresentable` sobre PDFKit:
-
-```swift
-var document: PDFDocument
-var page: Int? = nil          // página da frase; nil limpa
-var rects: [CGRect] = []      // caixas das linhas da frase
-var wordRect: CGRect? = nil   // caixa da palavra em leitura; nil limpa
-var follow: Bool = true
-var revealToken: Int = 0
-var onUserScroll: (() -> Void)? = nil  // rolagem do usuário → o dono desliga o seguimento
-var onPageClick: ((Int, CGPoint) -> Void)?
-```
-
-- **Destaque da frase (azul):** uma `PDFAnnotation` `.highlight` por
-  caixa (cor de acento translúcida, α 0.28), adicionada à página da
-  frase — geométrico, sem busca por texto (o filtrado nunca é
-  idêntico ao do PDF); desenhadas pela página, rolam junto com o
-  PDF. Deduplicação própria pela chave `key(page:rects:)` (página +
-  caixas), **separada do destaque da palavra**: a troca de palavra só
-  mexe na anotação amarela, e os tiques de 10 Hz não recriam nada
-  (recriar a cada palavra fazia o parágrafo inteiro piscar).
-  Removidas ao trocar de frase ou limpar (nunca anotação órfã — o
-  app nunca salva o documento). Troca de documento zera todo o
-  estado do coordenador.
-- **Destaque da palavra (amarelo):** `PDFAnnotation` (`.highlight`,
-  `systemYellow` α 0.55) com estado próprio no `Coordinator`
-  (`wordAnnotation`/`wordPage`), **reaproveitada** quando página e
-  caixa são as mesmas (evita piscar quando só o token mudou); trocada
-  só quando a caixa ou a página mudam; removida ao trocar de palavra
-  ou limpar.
-- **Rolagem da palavra:** `shouldScrollToWord` só rola quando o
-  follow está ligado E a palavra está FORA da área visível — rolar a
-  cada palavra engasga a fala.
-- **Rolagem do usuário:** o `Coordinator` observa os limites do
-  `NSClipView` interno do `PDFView` (encontrado em profundidade — o
-  PDFKit não o expõe nesta versão do SDK) e avisa `onUserScroll`
-  somente quando o seguimento está ligado, passou a janela de
-  silêncio de 0,5 s após um `go(to:)` programático
-  (`markProgrammaticScroll`), a origem mudou (>0,5 pt) e nem o
-  tamanho nem a escala mudaram (zoom e redimensionamento mexem em
-  tamanho/escala, nunca só na origem — decisão pura
-  `isUserScroll`, testada). O dono (`ContentView`) desliga o
-  "Seguir leitura" no aviso — a rolagem manual sempre vence a
-  automática.
-- **Clique no PDF (`ClickablePDFView`):** guarda o ponto no
-  `mouseDown` e só reporta no `mouseUp` com deslocamento <4 pt —
-  distingue clique de arrasto/seleção; o resto segue o PDFKit.
-  `onPageClick` devolve (índice da página 0-based, ponto em
-  coordenadas de página).
-
-`ClickableTextView` — `NSViewRepresentable` sobre `NSTextView`:
-
-- **Por que `NSTextView` e não `Text` do SwiftUI:** o `Text` renderiza
-  o `AttributedString` mas devolve apenas "clicaram no texto", sem
-  dizer ONDE; para pular a leitura até a frase é necessário o índice
-  do caractere sob o cursor, e só o TextKit fornece isso de forma
-  confiável (`glyphIndex(for:in:)` → `characterIndexForGlyph(at:)`,
-  com conversão de coordenadas da janela para o container, que tem
-  inset próprio).
-- **Por que `NSScrollView` em volta:** o `NSTextView` não tem tamanho
-  intrínseco; dar a ele a altura do texto inteiro faz o painel
-  engolir a janela e esconder o PDF (defeito medido). Com rolagem
-  interna o painel tem altura limitada (140…300 pt).
-- `pointSize` é `CGFloat` (não `Font`): `Font` é invólucro opaco e
-  o `NSTextView` precisa do valor em ponto.
-- **Só o clique, não o arrasto (`ClickReportingTextView`):** o
-  `mouseDown` guarda o ponto da janela e o caractere (conversão
-  janela→view, independente da rolagem); o `mouseUp` só reporta
-  com deslocamento <4 pt (`hypot`) — sem a guarda, arrastar para
-  selecionar disparava o salto no ponto da pressão (achado da
-  auditoria; o PDF já filtrava o mesmo limiar no
-  `ClickablePDFView`).
-- **Teleprompter:** `scrollTo` (UTF-16, como o TextKit conta) rola
-  até a frase lida quando ela muda — não a cada palavra, para não
-  tremer; com `follow` desligado, não toca na rolagem do usuário.
-
-`SettingsView` — cena `Settings` (⌘,), abas **Leitura** (voz, ritmo,
-seguimento, idioma), **Texto** (tamanho da fonte, "Texto integral",
-"Ler notas de rodapé") e **Avançado** (tamanho do cache em disco e
-botão "Limpar cache", via `CacheDisco.totalBytes()`/
-`clearAll(preserving:)` com aviso `.edgeSpeakClearCache`; a medida
-roda fora da main). Todo controle grava via `@AppStorage` nas chaves de
-`AppSetting` — as mesmas que o `ContentView` usa. Nota honesta: a
-cena de Ajustes não enxerga o controller da janela principal, então
-não há como desabilitar controles durante a síntese (a cadência vale
-para a próxima síntese de todo modo).
-
-## 15) Ferramentas (`Tools/`) — fronteira 1:1 com o Swift
-
-- **`pdf_extract.py`** (PyMuPDF, AGPL) — `--pdf/--out`; JSON
-  `pages[].lines[]` com `text`, `box` e `words[]` (uma entrada por
-  palavra, ordem de leitura, coordenadas **convertidas para PDFKit:
-  `[x0, h-y1, x1, h-y0]`**). Agrupa por (bloco, linha) do próprio
-  PyMuPDF; a ordem de leitura final é do Swift (XY-cut). Fronteira:
-  `PdfWords.lines` decodifica exatamente este JSON (campo `words`
-  opcional para compatibilidade).
-- **`synth_timing.py`** — devolve o áudio e os tempos por frase.
-  Modo preferido `--lines-file`: o app passa uma frase de fala por
-  linha e cada linha vira EXATAMENTE um segmento, na ordem
-  (`_group_words_lines`; linha vazia vira trecho de duração zero,
-  nunca é descartada — descartá-la deslocaria as seguintes). As
-  palavras caem na frase por **busca sequencial no texto
-  reconstruído** (`"\n".join(linhas)`), porque os eventos de palavra
-  NÃO trazem pontuação (medido: `world`, não `world.`). Duração da
-  frase encosta no início da frase seguinte (como os
-  SentenceBoundary do modo antigo) — o vão de silêncio entre frases
-  (0,3–0,5 s, medido) entra na duração, senão o highlight piscava
-  entre frases. Sem `--lines-file`, vale o modo antigo por regex
-  (`_split_sentences`/`_group_words`), só para compatibilidade —
-  **restrição: entrada sem pontuação terminal duplicada**. Passe
-  único com `boundary="WordBoundary"` (a biblioteca só emite UM tipo
-  de fronteira por síntese). Tempos em segundos (unidade da
-  biblioteca: 100 ns). Fronteira: `EdgeTTS` escreve
-  `chunk-%04d.txt` + `chunk-%04d.lines.txt` e lê o JSON
-  `{"segments": [...]}` com `loadSegments`.
-- **`piper_synth.py`** — processo persistente: carrega a voz UMA
-  vez, avisa `{"ready": true}` e atende pedidos JSON por linha de
-  stdin (`{"id", "text", "wav", "length_scale"}`), respondendo
-  `{"id", "duration"}` (lida do cabeçalho do WAV gerado, 16-bit
-  mono) ou `{"id", "error"}` — erro de um pedido não mata o processo.
-  Fronteira: `PiperTTS.PiperSession` fala exatamente este protocolo
-  (casamento por `id`, prazos de 300 s).
-- **`patch_edge_tts.py`** — remendo aplicado por `BundledEnv.ensure`
-  no site-packages do venv embutido (idempotente: segunda passada
-  sai 0 sem mudar um byte; testado com diretório fake):
-  1. `constants.py`: `WSS_URL` aponta para o endpoint v2
+- **`pdf_extract.py`** (PyMuPDF, AGPL) — `--pdf`/`--out`; JSON
+  `pages[].lines[]` with `text`, `box` and `words[]` (one entry per
+  word, reading order, coordinates **converted to PDFKit:
+  `[x0, h-y1, x1, h-y0]`**). Groups by (block, line) of PyMuPDF
+  itself; the final reading order is the Swift XY-cut. Boundary:
+  `PdfWords.lines` decodes exactly this JSON (the `words` field is
+  optional for compatibility).
+- **`synth_timing.py`** — returns the audio and the per-sentence
+  timings. Preferred mode `--lines-file`: the app passes one spoken
+  phrase per line and each line becomes EXACTLY one segment, in order
+  (`_group_words_lines`; an empty line becomes a zero-duration
+  passage, never discarded — discarding it would shift the following
+  ones). Words fall into the phrase by **sequential search in the
+  reconstructed text** (`"\n".join(lines)`), because the word events
+  carry NO punctuation (measured: `world`, not `world.`). The phrase
+  duration touches the start of the next phrase (like the
+  `SentenceBoundary` of the old mode) — the 0.3–0.5 s silence gap
+  between phrases (measured) enters the duration, else the highlight
+  blinked between phrases. Without `--lines-file`, the old regex mode
+  applies (`_split_sentences`/`_group_words`), for compatibility
+  only — **restriction: input without duplicated terminal
+  punctuation**. A single pass with `boundary="WordBoundary"` (the
+  library emits only ONE boundary type per synthesis). Timings in
+  seconds (the library's unit: 100 ns). Boundary: `EdgeTTS` writes
+  `chunk-%04d.txt` + `chunk-%04d.lines.txt` and reads the JSON
+  `{"segments": [...]}` with `loadSegments`.
+- **`piper_synth.py`** — a persistent process: loads the voice ONCE,
+  announces `{"ready": true}` and serves JSON-line requests over
+  stdin (`{"id", "text", "wav", "length_scale"}`), answering
+  `{"id", "duration"}` (read from the header of the generated WAV,
+  16-bit mono) or `{"id", "error"}` — an error in one request does
+  not kill the process. Boundary: `PiperTTS.PiperSession` speaks
+  exactly this protocol (matching by `id`, 300 s deadlines).
+- **`patch_edge_tts.py`** — a patch applied by `BundledEnv.ensure`
+  to the bundled venv's site-packages (idempotent: a second pass
+  exits 0 without changing a byte; tested with a fake directory):
+  1. `constants.py`: `WSS_URL` points to the v2 endpoint
      (`wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1`
-     com `Ocp-Apim-Subscription-Key`) — versões antigas usavam
-     `speech.platform.bing.com`, que a Microsoft passou a recusar
-     (403).
-  2. `drm.py`: `parse_rfc2616_date` usa
-     `email.utils.parsedate_to_datetime` — `strptime` com
-     `%a`/`%b` só entende inglês e quebra com o sistema em pt-BR.
-  Erros em pt-BR no stderr, saída 1 (falha) ou 2 (uso).
-
-## Regras transversais
-
-- **Sem SSML** (sem evidência de suporte no serviço); a pausa entre
-  parágrafos é feita com `\n` na junção do texto enviado ao motor.
-- Cache em disco por `(texto completo + voz + cadência + notas)`; a
-  chave muda quando o texto muda (por isso a marca de parágrafo no
-  `fullText` invalida uma vez). `CacheDisco.remove(key:)` apaga a
-  entrada (usado ao descartar transcrição).
-- Fronteira EdgeTTS ↔ `synth_timing.py` em 1:1 por construção
-  (`--lines-file`): uma linha por frase, um segmento por linha, na
-  ordem.
-- Destaque palavra a palavra: só vozes online.
-- Fonte da verdade do estado de reprodução: o `StreamingPlayer`.
-- **Índice de frase é propriedade, não posição** — toda reordenação
-  (notas de rodapé, filtros) preserva `Phrase.index`.
-- Cancelamento/troca de sessão por **geração**, em todas as camadas
-  (`synthGeneration`, `playbackGeneration`+`currentGeneration`,
-  `CancelFlag` por instância, `loadGeneration`).
-- Processos filhos são encerrados pelo **nome do script**, nunca por
-  "python" solto.
-
-## Invariantes — o que outro agente NÃO pode quebrar
-
-1. Uma frase nunca é cortada no meio: `buildChunks` agrupa frases
-   inteiras; a fronteira 1:1 com `--lines-file` depende disso.
-2. O texto enviado ao motor nunca duplica pontuação terminal
-   ("Frase..") — o `_SENT_END` do modo sem `--lines-file` criaria
-   frase-extra e desalinharia o emparelhamento; `\n` de parágrafo
-   não casa o regex.
-3. `Phrase.index` é propriedade: `resolveFootnotes` e os filtros
-   movem/removem frases SEM reindexar. Destaque, salto e karaokê
-   casam por índice global.
-4. `StreamingPlayer` é a única fonte da verdade de
-   `isPlaying`/`isPaused`/`isFinished`/`isStarved`/elapsed; o
-   controller só espelha. Nunca publicar estado de reprodução só no
-   controller.
-5. Toda escrita de estado de sessão confere a geração antes:
-   `gen == synthGeneration` (síntese), `currentGeneration ==
-   playbackGeneration` (delegate), `loadGeneration` (importação).
-   Gereação só aumenta; nunca zerar.
-6. Durações são medidas fora da main e preenchidas com guarda de
-   geração/URL/índice; `playChunk` completa apenas o próprio índice.
-   Nunca medir duração na thread principal.
-7. O salto por frase vai DIRETO à fatia que contém a frase, com
-   ponto `seg.start` local — nunca converter frase→tempo global com
-   offsets ainda não medidos.
-8. Karaokê por palavra só com voz online; o casamento é por texto
-   normalizado (WordAligner no PDF, cursor no painel) — nunca por
-   índice entre sequências de comprimentos diferentes.
-9. Palavra de expansão de fórmula fica SEM caixa (alinhamento
-   global, custo de troca 3 > 1 de pulo). Nunca forçar o casamento
-   de "and"/"such"/"there" com caixa de prosa.
-10. Anotações no PDF são geométricas (caixas do extrator), nunca por
-    busca de texto; deduplicação por chave própria (frase: página+
-    caixas; palavra: página+caixa) e remoção ao trocar/limpar —
-    nunca deixar anotação órfã no documento (o app não salva).
-11. Rolagem manual sempre vence: o detector só avisa com follow
-    ligado, fora da janela de 0,5 s do `go(to:)`, com origem
-    mudada e tamanho/escala iguais. Zoom e redimensionamento nunca
-    desligam o seguimento.
-12. A raiz da janela é o `Container` de tipo fixo; `.toolbar` nunca
-    é aplicado direto ao conteúdo que troca de forma (a barra some —
-    defeito medido).
-13. A chave de cache é SHA-256 de `"v3|<voz>|<percent>|[sem-notas|]
-    <texto>"` com `\n` nas fronteiras de parágrafo do `fullText`.
-    Trocar o prefixo ou a fórmula de junção invalida todo o cache de
-    uma vez — só se fez no `v2` (karaokê) e no `v3` (geração do
-    repartidor de frases); depois, nunca sem motivo.
-14. `CacheDisco` falha em silêncio e nunca toca na chave corrente
-    nem em entradas com <60 s; poda no máximo 1×/min em background.
-15. Piper: nunca deslocar offsets à mão nem inserir WAVs de silêncio
-    — o vão do `\n` de parágrafo entra na duração medida do WAV.
-16. `BundledEnv.ensure` é idempotente e serializado; o venv só nasce
-    da base embutida, e o pip instala `--no-index` a partir dos
-    wheels embutidos. Nunca tocar no Python do sistema.
-17. Processos de síntese são encerrados pelo nome do script
-    (`synth_timing.py`, `piper_synth.py`), nunca por "python" solto.
-18. `forSpeech` expande para a fala; `clean`/o texto exibido nunca
-    muda (contrato travado por `falaNaoAlteraExibicao`).
-19. Espaço e ⌥-setas são ignorados durante `isBusy` (regra do botão
-    desabilitado); Enter sempre alterna play/pausa.
-20. O status do controller guarda chave+args para re-resolver na
-    troca de idioma; progresso cru de motor (`recebeProgresso`)
-    limpa a chave para a troca não sobrescrevê-lo.
-21. Preferências só via constantes (`AppSetting` + a extensão em
-    `L10n`) — nunca repetir a string da chave `@AppStorage` à mão
-    em dois arquivos.
-22. Clique no PDF/texto sem áudio sintetiza A PARTIR da frase
-    clicada (`Array(lista[pos...])`), não do início; o pulo pendente
-    é retentado a cada fatia e morre com a síntese.
-23. Troca de modo integral/filtrado (e "Gerar leitura nova")
-    descarta a transcrição (`discardTranscription`) antes de qualquer
-    replay — sem isso o play reaproveita áudio antigo pela chave.
-24. O destaque do painel publica só quando o valor muda (45k letras
-    reconstruídas 10×/s saturam a main), e o texto atribuído é
-    cacheado por (frase, palavra) durante a leitura.
-
-## Testes (`Tests/EdgeSpeakTests/`) — o que cada suíte trava
-
-Suítes em swift-testing (`@Test`/`#expect`). `swift test` reporta
-**123 testes em 14 suítes** (conferido em 2026-10-13 por contagem de
-`@Test func`; era 80/9 antes das fases de notas de rodapé, L10n e
-alinhamento, e 88/10 antes do lote de hifenização/virada,
-cache e auditoria de UI):
-
-- `ReadAloudFilterTests` (32) — `forSpeech` por símbolo e idioma
-  (texto exato EN+PT: quantificadores, modais, turnos, conjuntos,
-  gregas, iota, cantos de Quine, primos, ASCII de comparação,
-  ⊤/⊥ em português, construtor de conjuntos, ferradura por
-  contexto), não-regressão de prosa comum ("3 x 4", datas,
-  "movem-se"), o contrato fala-não-altera-exibição, e o marcador
-  de nota colado (anuncia, não morde anos/decimais/figuras).
-  Pendência própria declarada: a extração de PDF pode entregar
-  símbolos de outro jeito (entidade, LaTeX, imagem); sem PDF de
-  fórmulas medido, os testes cobrem a função pura.
-- `WordAlignerTests` (11) — expansões não roubam caixa (caso do
-  artigo: 11 palavras faladas para 3 caixas), repetidas com
-  vizinhas diferentes vão cada uma à sua ocorrência, o caso real do
-  artigo (80 caixas; "the laboratory" na caixa 52–53, não 63–64),
-  a frase seguinte casa na SUA ocorrência (54–79), expansão antes
-  de repetida continua sem caixa, cache por tique estável,
-  normalização ignora pontuação/caixa/hífen.
-- `BundledEnvTests` (8) — ordem de probe do Python, nomes de voz do
-  Piper, site-packages em venv fake e o remendo idempotente do
-  edge-tts (endpoint v2 entra, parse imune a idioma entra, segunda
-  passada não muda um byte, sem pacote falha legível).
-- `L10nResolverTests` (8) — padrão PT, EN quando há chave,
-  interpolação posicional (um e vários args), fallback para PT,
-  chave desconhecida devolve a chave, argumento extra não quebra,
-  chave/default do idioma.
-- `FootnoteTests` (8) — corpo vai para após o marcador (mesma
-  página), nota de fim liga ao marcador anterior mais próximo,
-  número solto cai só com página, sem marcador não move nem tira
-  número, índices preservados, opção desligada cala o marcador,
-  opção ligada anuncia nos dois idiomas, default lê notas.
-- `PDFFollowTests` (5) — detector de rolagem do usuário: rolagem
-  programática, zoom e redimensionamento não desligam o seguimento;
-  palavra visível não rola.
-- `StreamingProofTests` (5) — salto por frase SEM durações medidas
-  (WAVs sintéticos com offsets zerados: vai direto à fatia 1),
-  entrega em ordem sob chegada fora de ordem (`OrderedPublisher`),
-  fatia ruim não trava (`isStarved`, não `isFinished`), `play()`
-  retoma com a fila esvaziada, tempos de palavra até a UI
-  (`mapSegments` preserva palavras e índices globais).
-- `L10nCompletenessTests` (5) — chaves iguais nos dois idiomas,
-  nenhum texto vazio, marcadores `{n}` com mesma aridade, nenhum
-  `\(` no catálogo, amostra das chaves da fase 2 existe nos dois.
-- `PdfClickLocatorTests` (3) — contenção vence, proximidade até
-  40 pt, margem devolve nil (e frase sem rects é ignorada).
-- `TranscriptionResetTests` (3) — modos integral/filtrado geram
-  textos e chaves de cache diferentes, `CacheDisco.remove` apaga do
-  cache, `discardTranscription` limpa o estado.
-- `TextImportTests` (7) — hifenização no casamento frase→caixas
-  (junto casa, no meio não junta, ligadura), frase na virada de
-  página parte em dois trechos (sem virada, um só) e reserva sem
-  caixa cai no segmento.
-- `CacheDiscoTests` (1) — `clearAll(preserving:)` apaga as demais
-  entradas preservando a chave em uso, `remove` apaga e
-  `totalBytes` responde.
+     with `Ocp-Apim-Subscription-Key`) — old versions used
+     `speech.platform.bing.com`, which Microsoft now refuses (403).
+  2. `drm.py`: `parse_rfc2616_date` uses
+     `email.utils.parsedate_to_datetime` — `strptime` with `%a`/`%b`
+     only understands English and breaks with the system in pt-BR.
+  Errors in pt-BR on stderr, exit 1 (failure) or 2 (usage).
 
 ---
 
-### Camadas
-- Scaffold (este repo): `Package.swift`, `build-app.sh`, `README.md`,
-  `CREDITS.md`, este `INTERFACE.md`, `Tools/`, `Resources/` (ícone).
-- Fonte: os arquivos listados acima. O orquestrador define os
-  contratos de fronteira; cada subagente toca arquivos disjuntos; a
-  integração é reverificada de forma independente.
-- **O que nunca entra no repositório** (`.gitignore`): `.build/`,
-  `Build/` (staging: base Python, wheels, vozes — ~490 MB),
-  `EdgeSpeak.app/`, `DerivedData/`, `.swiftpm/`, `.venv/`, `venv/`,
-  `__pycache__/`, `*.pyc`, `.DS_Store`, `.scratch/`,
-  `NOTAS_SESSAO.md`, `PROXIMA_SESSAO.md`, `*.log`, `*.xcuserstate`,
-  `xcuserdata/`, `.idea/`, `.vscode/`.
+## 4) Cross-cutting rules
 
-## Pendências (com o estado da prova)
+- **No SSML** (no evidence of service support); the pause between
+  paragraphs is made with `"\n"` in the text joined for the motor.
+- On-disk cache by (full text + voice + cadence + notes); the key
+  changes when the text changes (which is why the paragraph mark in
+  `fullText` invalidates once). `CacheDisco.remove(key:)` deletes the
+  entry (used when discarding a transcription).
+- The EdgeTTS ↔ `synth_timing.py` boundary is 1:1 by construction
+  (`--lines-file`): one line per phrase, one segment per line, in
+  order.
+- Word-by-word highlighting: online voices only.
+- The source of truth for playback state: `StreamingPlayer`.
+- **The sentence index is property, not position** — every
+  reordering (footnotes, filters) preserves `Phrase.index`.
+- Cancellation/session switch by **generation**, in all layers
+  (`synthGeneration`, `playbackGeneration`+`currentGeneration`,
+  `CancelFlag` per instance, `loadGeneration`).
+- Child processes are terminated by **script name**, never by a bare
+  "python".
 
-- **Primeiros segundos de áudio sem destaque no PDF:** reprodutível
-  (a fatia toca antes de o destaque assentar); **causa ainda não
-  isolada** — não há hipótese confirmada. Aberta.
-- **Corpos de nota de rodapé em PDFs cuja camada de texto não os
-  traz** (como o artigo de teste): o pipeline de ligação
-  marcador↔corpo está pronto e coberto por `FootnoteTests` com
-  listas sintéticas, mas depende do que o extrator encontrar; sem
-  corpo no PDF, só o marcador é anunciado. Melhoria mapeada:
-  detecção geométrica do marcador (caixa de superscript pequeno e
-  elevado em `Phrase.WordBox`) — hoje a ligação é textual
-  (`expandFootnoteMarkers`), que não distingue "argumento.7" de
-  "mp3" além das guardas de regex.
-- `ReadAloudFilterTests` declara pendência própria: a extração de
-  PDF pode entregar símbolos lógicos de outro jeito (entidade,
-  LaTeX, imagem); sem PDF de fórmulas medido, os testes cobrem a
-  função pura.
-- Caminhos de melhoria pesquisados, sem integração (ver
-  `docs/pesquisas/oss-mapa.md`): Montreal Forced Aligner (MIT) para
-  karaokê offline com Piper; AVAudioPlayerNode (nativo) para
-  concatenação gapless sem sonda de duração; pdfminer.six (MIT) como
-  plano B se o AGPL do PyMuPDF for bloqueador ao abrir o app.
+## 5) Invariants — what another agent must not break
+
+1. A sentence is never cut in the middle: `buildChunks` groups whole
+   sentences; the 1:1 boundary with `--lines-file` depends on it.
+2. The text sent to the motor never duplicates terminal punctuation
+   ("Frase..") — the `_SENT_END` of the mode without `--lines-file`
+   would create an extra sentence and misalign the pairing; a
+   paragraph `"\n"` does not match the regex.
+3. `Phrase.index` is property: `resolveFootnotes` and the filters
+   move/remove sentences WITHOUT reindexing. Highlighting, jumping and
+   karaoke match by global index.
+4. `StreamingPlayer` is the only source of truth for
+   `isPlaying`/`isPaused`/`isFinished`/`isStarved`/elapsed; the
+   controller only mirrors. Never publish playback state only in the
+   controller.
+5. Every session-state write checks the generation first:
+   `gen == synthGeneration` (synthesis), `currentGeneration ==
+   playbackGeneration` (delegate), `loadGeneration` (import). A
+   generation only increases; never zero it.
+6. Durations are measured off the main actor and filled with a
+   generation/URL/index guard; `playChunk` completes only its own
+   index. Never measure a duration on the main actor.
+7. A jump by sentence goes DIRECTLY to the chunk containing it, with
+   the local `seg.start` point — never convert sentence → global time
+   with offsets still unmeasured.
+8. Karaoke by word only with an online voice; the match is by
+   normalized text (`WordAligner` in the PDF, a sequential cursor in
+   the panel) — never by index between sequences of different lengths.
+9. A formula expansion word stays WITHOUT a box (global alignment,
+   substitution cost 3 > skip cost 1). Never force "and"/"such"/
+   "there" to match a prose box.
+10. Annotations in the PDF are geometric (the extractor's boxes),
+    never a text search; deduplicated by their own keys (sentence:
+    page+boxes; word: page+box) and removed on change/clear — never
+    leave an orphaned annotation (the app does not save).
+11. Manual scrolling always wins: the detector only notifies with
+    follow on, outside the 0.5 s window of a `go(to:)`, with a
+    changed origin and equal size/scale. Zoom and resizing never turn
+    follow off.
+12. The window root is the fixed-type `Container`; `.toolbar` is
+    never applied directly to content that changes shape (the toolbar
+    disappears — a measured defect).
+13. The cache key is SHA-256 of `"v3|<voice>|<percent>|[no-notes|]
+    <text>"` with `"\n"` at the paragraph boundaries of `fullText`.
+    Changing the prefix or the join formula invalidates the whole cache
+    at once — only done in `v2` (karaoke) and `v3` (phrase-splitter
+    generation); never again without a reason.
+14. `CacheDisco` fails silently and never touches the current key nor
+    entries younger than 60 s; pruning at most 1×/min in the
+    background.
+15. Piper: never shift offsets by hand nor insert silence WAVs — the
+    gap of a paragraph `"\n"` enters the measured duration of the WAV.
+16. `BundledEnv.ensure` is idempotent and serialized; the venv is
+    born only from the embedded base, and pip installs `--no-index`
+    from the bundled wheels. Never touch the system Python.
+17. Synthesis processes are terminated by script name
+    (`synth_timing.py`, `piper_synth.py`), never by a bare "python".
+18. `forSpeech` expands for speech; `clean`/the displayed text never
+    changes (the contract locked by `falaNaoAlteraExibicao`).
+19. Space and ⌥-arrows are ignored during `isBusy` (the disabled-button
+    rule); Enter always toggles play/pause.
+20. The controller's status stores key+args to re-resolve on a
+    language change; raw motor progress (`recebeProgresso`) clears the
+    key so the switch does not overwrite it.
+21. Preferences only via constants (`AppSetting` + the extension in
+    `L10n`) — never repeat the `@AppStorage` key string by hand in
+    two files.
+22. A click in the PDF/text with no audio synthesizes FROM the clicked
+    sentence (`Array(lista[pos...])`), not from the beginning; the
+    pending jump is retried with each slice and dies with the
+    synthesis.
+23. Switching full/filtered mode (and *Generate new reading*) discards
+    the transcription (`discardTranscription`) before any replay —
+    without it, play reuses old audio by key.
+24. The panel highlight publishes only when the value changes
+    (rebuilding 45k letters 10×/s saturates the main actor), and the
+    attributed string is cached by (sentence, word) during a reading.
+
+## 6) Tests (`Tests/EdgeSpeakTests/`)
+
+18 files, 133 `@Test` functions (counted in the source tree on
+2026-10-13). swift-testing (`@Test`/`#expect`), not XCTest. Per-file
+counts: `BundledEnvTests` 8 · `CacheDiscoTests` 1 · `EdgeTTSChunkTests`
+6 · `FootnoteTests` 28 · `L10nCompletenessTests` 5 · `L10nResolverTests`
+8 · `MotoresProtecaoTests` 2 · `PDFFollowTests` 5 · `PdfClickLocatorTests`
+3 · `ReadAloudFilterTests` 34 · `ResumeTests` 3 · `ScratchTrilhoSonda` 1 ·
+`StatusMirrorTests` 1 · `StreamingPlayerStarvedSeekTests` 1 ·
+`StreamingProofTests` 6 · `TextImportTests` 7 · `TranscriptionResetTests`
+3 · `WordAlignerTests` 11.
+
+What each suite locks:
+
+- `ReadAloudFilterTests` (34) — `forSpeech` by symbol and language
+  (exact EN+PT text: quantifiers, modals, turnstiles, sets, Greek,
+  iota, Quine corners, primes, ASCII comparisons, ⊤/⊥ in Portuguese,
+  set-builder, horseshoe by context), non-regression of ordinary prose
+  ("3 x 4", dates, "movem-se"), the speech-does-not-alter-display
+  contract, and the glued footnote marker (announces, does not bite
+  years/decimals/figures). Declared pending: PDF extraction can
+  deliver symbols another way (entity, LaTeX, image); without a
+  measured formula PDF, the tests cover the pure function.
+- `WordAlignerTests` (11) — expansions do not steal a box
+  (`expansoesNaoRoubanCaixa`), repeated words with different
+  neighbors go each to their own occurrence (`repetidaComVizinhasDiferentes`),
+  a repeated "the" does not shift (`theRepetidoNaoDesloca`), a PDF
+  symbol not spoken (`pdfComSimboloNaoFalado`), a repeated "the" in
+  the article stays in its own phrase
+  (`theRepetidoNoArtigoFicaNaPropriaOcorrencia`), the next phrase
+  matches at its own occurrence (`fraseSeguinteCasaNaPropriaOcorrencia`),
+  an expansion before a repeated word does not steal a box
+  (`expansaoAntesDeRepetidaNaoRoubaCaixa`), the box of the target
+  (`caixaDoAlvo`), a repeated tick does not change the box
+  (`repetirTiqueNaoMudaACaixa`), changing the phrase recomputes
+  (`trocaDeFraseRecalcula`), normalization (`normalizacao`).
+- `BundledEnvTests` (8) — the Python probe order, the Piper voice
+  names, site-packages in a fake venv and the idempotent edge-tts
+  patch (`suporteValidoVence`, `nomesDeVoz`): the v2 endpoint
+  enters, the language-immune parse enters, a second pass does not
+  change a byte, a missing package fails legibly.
+- `L10nResolverTests` (8) — PT default, EN when the key exists,
+  positional interpolation (one and several args), fallback to PT, an
+  unknown key returns the key, an extra argument does not break, the
+  language key/default.
+- `FootnoteTests` (28) — the body goes after the marker (same page)
+  (`corpoVaiParaAposOMarcador`), an endnote links to the nearest
+  previous marker (`notaDeFimLigaAtras`), a loose number falls only
+  with a page, without a marker it neither moves nor strips the
+  number, indices preserved, the option off silences the marker, the
+  option on announces in both languages, the default reads notes.
+- `PDFFollowTests` (5) — the user-scroll detector: programmatic
+  scrolling, zoom and resizing do not turn follow off
+  (`rolagemDoUsuarioDesliga`); a visible word does not scroll.
+- `StreamingProofTests` (6) — a jump by sentence WITHOUT measured
+  durations (synthetic WAVs with zero offsets: it goes straight to
+  chunk 1) (`saltoPorFraseSemDuracoes`), in-order delivery under
+  out-of-order arrival (`OrderedPublisher`), a bad chunk does not
+  stall (`isStarved`, not `isFinished`), `play()` resumes with the
+  queue emptied, word timings reach the UI (`mapSegments` preserves
+  words and global indices).
+- `L10nCompletenessTests` (5) — the same keys in both languages, no
+  empty text, `{n}` markers with the same arity, no `\(` in the
+  catalog, a sample of phase-2 keys exists in both.
+- `PdfClickLocatorTests` (3) — containment wins (`contencaoVence`),
+  proximity up to 40 pt, the margin returns nil (and a phrase without
+  rects is ignored).
+- `TranscriptionResetTests` (3) — full/filtered modes generate
+  different texts and cache keys (`modosGeramTextosEChavesDiferentes`),
+  `CacheDisco.remove` deletes from the cache (`removerApagaDoCache`),
+  `discardTranscription` clears the state.
+- `TextImportTests` (7) — hyphenation in the sentence→boxes match
+  (the joined one matches, the middle one does not join, a ligature),
+  a sentence at a page break splits into two passages (without a
+  break, a single one), and a reserve without boxes falls back to the
+  segment.
+- `CacheDiscoTests` (1) — `clearAll(preserving:)` deletes the other
+  entries while preserving the key in use, `remove` deletes, and
+  `totalBytes` answers.
+- `EdgeTTSChunkTests` (6) — slicing: with an overflow in the middle
+  of the next paragraph, the cut retreats to the previous paragraph
+  end instead of splitting the thought (`fatiaCortaEmFimDeParagrafo`),
+  the short first slice is preserved (`primeiraFatiaCurta`), a
+  giant paragraph still splits without losing a sentence, and the
+  final-silence trim (ffmpeg trims the tail only when it saves more
+  than 2 KB; timings intact).
+- `MotoresProtecaoTests` (2) — cross-engine protection (M4) and
+  duration with an extra chunk (B3): a WAV with a `LIST` chunk
+  between `fmt` and `data` — the measured duration must ignore the
+  extra chunk.
+- `ResumeTests` (3) — per-document resume: round-trip against an
+  ephemeral UserDefaults suite (another document/voice does not
+  inherit), positions below 3 s are not saved, the coverage guard
+  (no saved point, no audio, or a point beyond the measured duration
+  means no resume), and clear forgets.
+- `StatusMirrorTests` (1) — the state-mirror proof (finding B1): a
+  transient status message survives the streamer's `objectWillChange`
+  ticks — the mirror republishes only when the effective state
+  changes. Headless, no audio, no network.
+- `StreamingPlayerStarvedSeekTests` (1) — regression of audit finding
+  M1: jumping to a sentence of ANOTHER chunk with the queue emptied
+  (`isStarved`, synthesis in course) started the audio in `playChunk`
+  and then the `else` of `gotoChunk` rewrote `isPlaying=false;
+  isPaused=true`, and the following `play()` was a no-op (the UI
+  showed "paused" with sound) — the declared state must match the
+  audio in playback.
+- `ScratchTrilhoSonda` (1) — a scratch probe for the scrubber
+  behavior, kept in the test target.
+
+---
+
+### Scaffold
+
+- This repo: `Package.swift`, `build-app.sh`, `README.md`,
+  `CREDITS.md`, this `INTERFACE.md`, `Tools/`, `Resources/` (the
+  icon).
+- Sources: the files listed above. The orchestrator defines the
+  boundary contracts; each subagent touches disjoint files; the
+  integration is re-verified independently.
+- **Never committed** (`.gitignore`): `.build/`, `Build/` (staging:
+  the Python base, wheels, voices — ~490 MB), `EdgeSpeak.app/`,
+  `DerivedData/`, `.swiftpm/`, `.venv/`, `venv/`, `__pycache__/`,
+  `*.pyc`, `.DS_Store`, `.scratch/`, `NOTAS_SESSAO.md`,
+  `PROXIMA_SESSAO.md`, `*.log`, `*.xcuserstate`, `xcuserdata/`,
+  `.idea/`, `.vscode/`.
+
+## 7) Known limits and open items
+
+- **The first seconds of audio without a highlight in the PDF:**
+  reproducible (the slice plays before the highlight settles); the
+  **cause is still not isolated** — there is no confirmed hypothesis.
+  Open.
+- **Footnote bodies in PDFs whose text layer does not carry them**
+  (like the test article): the marker↔body pipeline is ready and
+  covered by `FootnoteTests` with synthetic lists, but it depends on
+  what the extractor finds; without a body in the PDF, only the
+  marker is announced. Mapped improvement: geometric detection of the
+  marker (a small, raised superscript box in `Phrase.WordBox`) —
+  today the linking is textual (`expandFootnoteMarkers`), which does
+  not distinguish "argument.7" from "mp3" beyond the regex guards.
+- `ReadAloudFilterTests` declares its own pending item: PDF extraction
+  can deliver logic symbols another way (entity, LaTeX, image);
+  without a measured formula PDF, the tests cover the pure function.
+- Improvement paths researched, without integration (see
+  `docs/pesquisas/oss-mapa.md`): Montreal Forced Aligner (MIT) for
+  offline karaoke with Piper; AVAudioPlayerNode (native) for gapless
+  concatenation without a duration probe; pdfminer.six (MIT) as a
+  fallback plan if the PyMuPDF AGPL becomes blocking when opening the
+  app.
+- The scrubber during streaming still pins to the measured audio (a
+  known open item in the backlog).

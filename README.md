@@ -199,7 +199,7 @@ and nothing runs in the background.
 
 ## License
 
-EdgeSpeak is released under the [GPL-3.0 License](LICENSE). Piper (GPL-3.0) and PyMuPDF (AGPL-3.0) run from wheels packed in the app; the Piper voice datasets are CC0 — see [CREDITS.md](CREDITS.md). The interface layout follows IINA's design (top toolbar, floating control bar at the bottom); the sentence-navigation idea comes from PDFVoice (MIT), the algorithm rewritten from scratch, no code copied.
+EdgeSpeak is released under the [GPL-3.0 License](LICENSE). Piper (GPL-3.0) and PyMuPDF (AGPL-3.0) run from wheels packed in the app; the Piper voice datasets are CC0 — see [CREDITS.md](CREDITS.md).
 
 ---
 
