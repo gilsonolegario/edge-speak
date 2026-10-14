@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 /// Clickable text that reports which passage was clicked.
 ///
@@ -23,12 +24,80 @@ struct ClickableTextView: NSViewRepresentable {
     var scrollTo: NSRange? = nil
     /// Follow the reading; when off, manual scrolling is respected.
     var follow: Bool = true
+    /// Live controller for the DIRECT-DRIVE word paint (yellow reimplementation):
+    /// the coordinator observes `highlightWordIndex` and paints the word run
+    /// straight into the text storage, with zero SwiftUI rebuilds per word.
+    /// Sentence background keeps flowing through `attributed` as before.
+    var controller: SpeechController? = nil
+    /// Current sentence context (full text + its range) for locating the word.
+    var sentenceContext: (() -> (full: String, entry: Range<String.Index>)?)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    @MainActor
     final class Coordinator {
         var lastScrolledLocation: Int = -1
         var lastScrolledLength: Int = -1
+        /// Currently painted word run (protected from sentence repaints).
+        var wordRange: NSRange?
+        var wordCancellable: AnyCancellable?
+        weak var box: ClickReportingTextView?
+        var controller: SpeechController?
+        var context: (() -> (full: String, entry: Range<String.Index>)?)?
+        var pointSize: CGFloat = 13
+
+        /// Sentence background color (same as the SwiftUI path's).
+        static var sentenceBG: NSColor { NSColor.controlAccentColor.withAlphaComponent(0.35) }
+        static var wordBG: NSColor { NSColor.systemYellow.withAlphaComponent(0.75) }
+
+        func bind(controller: SpeechController, textView: ClickReportingTextView,
+                  context: (() -> (full: String, entry: Range<String.Index>)?)?, pointSize: CGFloat) {
+            guard wordCancellable == nil else { return }
+            self.box = textView
+            self.controller = controller
+            self.context = context
+            self.pointSize = pointSize
+            wordCancellable = controller.$highlightWordIndex
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.paintWord() }
+        }
+
+        /// Paints the current word straight into the storage (no view update).
+        /// Miss (expansion without textual match) keeps the last word.
+        func paintWord() {
+            guard let tv = box, let st = tv.textStorage, let c = controller else { return }
+            guard !PiperTTS.isOfflineVoice(c.voiceInUse),
+                  let ctx = context?(),
+                  c.highlightWordIndex >= 0,
+                  let seg = c.segments.first(where: { $0.index == c.highlightIndex }),
+                  !seg.words.isEmpty,
+                  let loc = ClickableTextView.locateWord(
+                      full: ctx.full, entry: ctx.entry,
+                      segWords: seg.words.map(\.text), target: c.highlightWordIndex)
+            else { clearWord(); return }
+            let range = NSRange(location: loc.low, length: loc.high - loc.low)
+            guard range.length > 0, range.location + range.length <= st.length else { clearWord(); return }
+            if wordRange == range { return }
+            clearWord()
+            st.beginEditing()
+            st.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: pointSize), range: range)
+            st.addAttribute(.foregroundColor, value: NSColor.black, range: range)
+            st.addAttribute(.backgroundColor, value: Self.wordBG, range: range)
+            st.endEditing()
+            wordRange = range
+        }
+
+        /// Removes the word run, restoring the sentence style underneath.
+        func clearWord() {
+            guard let r = wordRange, let tv = box, let st = tv.textStorage,
+                  r.location + r.length <= st.length else { wordRange = nil; return }
+            st.beginEditing()
+            st.addAttribute(.font, value: NSFont.systemFont(ofSize: pointSize), range: r)
+            st.addAttribute(.foregroundColor, value: NSColor.labelColor, range: r)
+            st.addAttribute(.backgroundColor, value: Self.sentenceBG, range: r)
+            st.endEditing()
+            wordRange = nil
+        }
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -64,15 +133,43 @@ struct ClickableTextView: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: min(index, (textView.string as NSString).length), length: 0))
         }
         scroll.documentView = textView
+        if let controller {
+            context.coordinator.bind(controller: controller, textView: textView,
+                                     context: sentenceContext, pointSize: pointSize)
+        }
         return scroll
     }
 
     /// Background runs (range + color) of a storage: equality means the
     /// highlight already shows exactly this — repainting would only redo layout.
-    @MainActor
-    /// Background runs (range + canonical color): equality means the highlight
+    /// Locates the spoken word `target` inside the sentence (UTF-16 offsets in
+    /// `full`), by text matching from the previous match on. Nil on miss —
+    /// the caller keeps the last highlight instead of erasing it. Pure (tested).
+    static func locateWord(full: String, entry: Range<String.Index>, segWords: [String], target: Int) -> (low: Int, high: Int)? {
+        let phraseText = String(full[entry])
+        var cursor = phraseText.startIndex
+        var found: Range<String.Index>?
+        for (i, raw) in segWords.enumerated() {
+            guard i <= target else { break }
+            let needle = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !needle.isEmpty,
+                  let m = phraseText.range(of: needle, options: .caseInsensitive,
+                                           range: cursor..<phraseText.endIndex) else { continue }
+            if i == target { found = m }
+            cursor = m.upperBound
+        }
+        guard let local = found else { return nil }
+        let dLow = phraseText.distance(from: phraseText.startIndex, to: local.lowerBound)
+        let dHigh = phraseText.distance(from: phraseText.startIndex, to: local.upperBound)
+        guard let bLow = full.index(entry.lowerBound, offsetBy: dLow, limitedBy: full.endIndex),
+              let bHigh = full.index(entry.lowerBound, offsetBy: dHigh, limitedBy: full.endIndex) else { return nil }
+        let ns = NSRange(bLow..<bHigh, in: full)
+        guard ns.length > 0 else { return nil }
+        return (ns.location, ns.location + ns.length)
+    }
     /// already shows exactly this. Colors compare by resolved sRGB components,
     /// never by `description` (dynamic colors describe differently per appearance).
+    @MainActor
     static func bgRuns(_ storage: NSAttributedString) -> [String] {
         var out: [String] = []
         let full = NSRange(location: 0, length: storage.length)
@@ -92,24 +189,60 @@ struct ClickableTextView: NSViewRepresentable {
     /// storage (restoring base font/color there) and applies the desired
     /// runs. Same characters on both sides by contract — the caller checks.
     @MainActor
-    static func paintHighlight(storage: NSTextStorage, desired: NSAttributedString, pointSize: CGFloat) {
+    static func paintHighlight(storage: NSTextStorage, desired: NSAttributedString, pointSize: CGFloat, protected: NSRange? = nil) {
         let baseFont = NSFont.systemFont(ofSize: pointSize)
         let full = NSRange(location: 0, length: min(storage.length, desired.length))
         guard full.length > 0 else { return }
+        func hits(_ range: NSRange) -> Bool {
+            guard let p = protected, p.length > 0 else { return false }
+            return NSIntersectionRange(range, p).length > 0
+        }
         storage.beginEditing()
         storage.enumerateAttribute(.backgroundColor, in: full, options: []) { value, range, _ in
-            guard value != nil else { return }
+            guard value != nil, !hits(range) else { return }
             storage.removeAttribute(.backgroundColor, range: range)
             storage.addAttribute(.font, value: baseFont, range: range)
             storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
         }
         desired.enumerateAttributes(in: full, options: []) { attrs, range, _ in
             guard attrs[.backgroundColor] != nil else { return }
+            // Sentence background yields to the live word run (split around it).
+            if let p = protected, p.length > 0 {
+                let inter = NSIntersectionRange(range, p)
+                if inter.length > 0 {
+                    if range.location < inter.location {
+                        let left = NSRange(location: range.location, length: inter.location - range.location)
+                        storage.addAttribute(.backgroundColor, value: attrs[.backgroundColor] as Any, range: left)
+                    }
+                    let rightLoc = inter.location + inter.length
+                    let rangeEnd = range.location + range.length
+                    if rightLoc < rangeEnd {
+                        let right = NSRange(location: rightLoc, length: rangeEnd - rightLoc)
+                        storage.addAttribute(.backgroundColor, value: attrs[.backgroundColor] as Any, range: right)
+                    }
+                    return
+                }
+            }
             storage.addAttribute(.backgroundColor, value: attrs[.backgroundColor] as Any, range: range)
             if let font = attrs[.font] { storage.addAttribute(.font, value: font, range: range) }
             if let fg = attrs[.foregroundColor] { storage.addAttribute(.foregroundColor, value: fg, range: range) }
         }
         storage.endEditing()
+    }
+
+    /// Background runs outside the protected (live word) run: equality means
+    /// the sentence highlight already shows — word ticks skip the repaint.
+    @MainActor
+    static func sentenceRuns(_ storage: NSAttributedString, protected: NSRange?) -> [String] {
+        var out: [String] = []
+        let full = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.backgroundColor, in: full, options: []) { value, range, _ in
+            guard value != nil else { return }
+            if let p = protected, p.length > 0,
+               NSIntersectionRange(range, p).length > 0 { return }
+            out.append("\(range.location):\(range.length)")
+        }
+        return out
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -123,21 +256,22 @@ struct ClickableTextView: NSViewRepresentable {
             onTap(index)
             textView.setSelectedRange(NSRange(location: min(index, (textView.string as NSString).length), length: 0))
         }
-        // Highlight path: same characters → only attributes moved (sentence or
-        // word tick). A full storage swap per word re-laid the whole document
-        // and the yellow lagged; instead repaint only when the background runs
-        // differ (equality skips the redundant layout, never a new highlight —
-        // a click always changes the runs and repaints). New document → full
-        // swap as before.
+        // Highlight path: sentence background flows through `attributed`; the
+        // live word run is painted directly by the coordinator (zero SwiftUI
+        // rebuilds per word) and this path never touches it. Word ticks with
+        // unchanged sentence background skip entirely.
         let plain = String(attributed.characters)
         if let storage = textView.textStorage, storage.string == plain {
+            let protected = context.coordinator.wordRange
             let current = NSAttributedString(attributed)
-            guard Self.bgRuns(storage) != Self.bgRuns(current) else { return }
-            Self.paintHighlight(storage: storage, desired: current, pointSize: pointSize)
+            guard Self.sentenceRuns(storage, protected: protected)
+                != Self.sentenceRuns(current, protected: protected) else { return }
+            Self.paintHighlight(storage: storage, desired: current, pointSize: pointSize, protected: protected)
         } else if let storage = textView.textStorage {
             let current = NSAttributedString(attributed)
             if !storage.isEqual(to: current) {
                 storage.setAttributedString(current)
+                context.coordinator.wordRange = nil
                 textView.font = NSFont.systemFont(ofSize: pointSize)
                 textView.textContainer?.widthTracksTextView = true
             }

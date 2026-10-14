@@ -252,20 +252,26 @@ struct ContentView: View {
                 }
             },
             scrollTo: scroll,
-            follow: followReading
+            follow: followReading,
+            controller: controller,
+            sentenceContext: {
+                let i = controller.highlightIndex
+                guard i >= 0,
+                      let e = model.ranges.first(where: { $0.index == i }) else { return nil }
+                return (model.text, e.range)
+            }
         )
         .frame(maxWidth: .infinity, minHeight: 140, maxHeight: 300, alignment: .leading)
     }
 
     /// Highlights by GLOBAL INDEX (not by text search): repeated sentences
-    /// would highlight the wrong occurrence without it. With word-by-word
-    /// karaoke in online mode (Text panel, with or without PDF): the active
-    /// sentence gets a background and the active word gets bold + stronger background. No
-    /// karaoke offline (Piper emits no word times).
+    /// would highlight the wrong occurrence without it. The active sentence
+    /// gets a background here (blue path, works); the active WORD is painted
+    /// directly by the coordinator (direct drive, zero SwiftUI rebuilds per
+    /// word). No karaoke offline (Piper emits no word times).
     ///
-    /// During reading the result is cached by (sentence, word): the view
-    /// is re-evaluated on every progress tick, and rebuilding 45k letters
-    /// from scratch on each one saturated the main thread. Outside reading it computes directly.
+    /// During reading the result is cached by sentence: word ticks reuse the
+    /// cached value and never rebuild.
     @State private var attrKey = ""
     @State private var attrValue = AttributedString("")
     /// Identity of the displayed text (document + full/filtered mode). Enters
@@ -285,8 +291,7 @@ struct ContentView: View {
         guard isReading || controller.isBusy else {
             return buildAttributedPhrases(full, ranges: ranges)
         }
-        let key = "\(attrGeneration)#\(controller.highlightIndex)#"
-            + "\(controller.highlightWordIndex)"
+        let key = "\(attrGeneration)#\(controller.highlightIndex)"
         if key == attrKey { return attrValue }
         let value = buildAttributedPhrases(full, ranges: ranges)
         DispatchQueue.main.async {
@@ -329,60 +334,7 @@ struct ContentView: View {
             }
             base = fresh
         }
-        var attributed = base
-        guard target >= 0,
-              let entry = ranges.first(where: { $0.index == target })
-        else { return attributed }
-        // Word-by-word karaoke in online mode (text or PDF: the Text
-        // panel uses the same streamer segments); Piper does not emit
-        // word times.
-        guard !PiperTTS.isOfflineVoice(controller.voiceInUse),
-              controller.highlightWordIndex >= 0,
-              let seg = controller.segments.first(where: { $0.index == target }),
-              !seg.words.isEmpty
-        else { return attributed }
-        // Aligns word→passage by TEXT MATCHING, not by index: the
-        // spoken text expands years/abbreviations ("1998" becomes several
-        // words), and direct indexing fell on the wrong word. Each word
-        // is searched from the end of the previous one; a miss is skipped without
-        // shifting the following ones. A miss on an expansion keeps the LAST
-        // located word of THIS tick instead of erasing the yellow (same-tick
-        // state, no async race).
-        let phraseText = String(full[entry.range])
-        var cursor = phraseText.startIndex
-        var wordLocal: Range<String.Index>?
-        var lastFound: Range<String.Index>?
-        for (i, w) in seg.words.enumerated() {
-            guard i <= controller.highlightWordIndex else { break }
-            let needle = w.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !needle.isEmpty,
-                  let found = phraseText.range(
-                      of: needle, options: .caseInsensitive,
-                      range: cursor..<phraseText.endIndex) else { continue }
-            if i == controller.highlightWordIndex { wordLocal = found }
-            else { lastFound = found }
-            cursor = found.upperBound
-        }
-        let local = wordLocal ?? lastFound
-        guard local != nil else { return attributed }
-        // Converts the sentence's passage to the full string's base.
-        let distLow = phraseText.distance(from: phraseText.startIndex, to: local!.lowerBound)
-        let distHigh = phraseText.distance(from: phraseText.startIndex, to: local!.upperBound)
-        let baseLow = full.index(entry.range.lowerBound, offsetBy: distLow)
-        let baseHigh = full.index(entry.range.lowerBound, offsetBy: distHigh)
-        if let wordRange = Range(baseLow..<baseHigh, in: attributed) {
-            attributed[wordRange].appKit.font = NSFont.boldSystemFont(ofSize: fontSize)
-            // Word in its own color, distinct from the line: white text in
-            // bold over a strong highlight background — legible in both themes
-            // and unmistakable from the sentence's soft background.
-            // Word in YELLOW like in the PDF (no longer the system blue): dark
-            // text on yellow reads well in both themes and unifies the karaoke
-            // across both views — that was the divergence the audit pointed out.
-            attributed[wordRange].appKit.foregroundColor = NSColor.black
-            attributed[wordRange].appKit.backgroundColor =
-                NSColor.systemYellow.withAlphaComponent(0.75)
-        }
-        return attributed
+        return base
     }
 
     var body: some View {

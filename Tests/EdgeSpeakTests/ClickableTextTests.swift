@@ -26,8 +26,30 @@ struct ClickableTextTests {
     }
 }
 
-/// Incremental highlight: only changed background runs repaint (never a
-/// skipped new highlight — the click regression), full swap otherwise.
+/// Direct-drive word location: UTF-16 offsets of the spoken word in the full
+/// text, nil on miss (caller keeps the last highlight).
+@MainActor
+struct LocateWordTests {
+    private let full = "scientists study genes and alleles"
+    private var entry: Range<String.Index> { full.startIndex..<full.endIndex }
+
+    @Test func hitsSecondWord() {
+        let got = ClickableTextView.locateWord(
+            full: full, entry: entry, segWords: ["scientists", "study", "genes"], target: 1)
+        let want = (full as NSString).range(of: "study")
+        #expect(got?.low == want.location && got?.high == want.location + want.length)
+    }
+
+    @Test func missKeepsNil() {
+        #expect(ClickableTextView.locateWord(
+            full: full, entry: entry, segWords: ["scientists", "1998"], target: 1) == nil)
+    }
+
+    @Test func beyondEndIsNil() {
+        #expect(ClickableTextView.locateWord(
+            full: full, entry: entry, segWords: ["scientists"], target: 5) == nil)
+    }
+}
 @MainActor
 struct ClickablePaintTests {
     private func storage(_ text: String) -> NSTextStorage {

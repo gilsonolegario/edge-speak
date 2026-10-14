@@ -483,6 +483,37 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         highlightTimer = timer
     }
 
+    /// Nudge state: when the timed word stalls while its sentence continues
+    /// (timings exhausted by expansions like years), the yellow would freeze
+    /// and jump — it creeps instead, one word per ~0.9 s, never past the last
+    /// timed word. Reset on every real change; every nudge is probe-marked.
+    private var nudgeWord = -1
+    private var nudgeSince = 0.0
+    private var nudgeSeg = -1
+    private var nudgedNow = false
+    /// TEMP diagnostic: 1 Hz + on-change trace of audio time vs shown
+    /// segment/word. Removed after the lag investigation.
+    private var lagProbeCount = 0
+    private var lagProbeLast = ""
+    private func lagProbe(audioTime: Double, chunk: Int, seg: Int, word: Int) {
+        lagProbeCount += 1
+        let key = "\(seg)#\(word)"
+        let changed = key != lagProbeLast
+        lagProbeLast = key
+        guard changed || lagProbeCount % 10 == 0 else { return }
+        let line = String(format: "%.3f %.3f %d %d %d %@\n",
+                          Date().timeIntervalSince1970, audioTime, chunk, seg, word,
+                          nudgedNow ? "nudge" : (changed ? "chg" : "hb"))
+        guard let data = line.data(using: .utf8) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edgespeak-lag.log")
+        if FileManager.default.fileExists(atPath: url.path),
+           let h = try? FileHandle(forWritingTo: url) {
+            try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
     private func updateHighlight(at seconds: Double) {
         elapsed = nextIndex < chunkOffsets.count
             ? chunkOffsets[nextIndex] + seconds
@@ -509,7 +540,23 @@ final class StreamingPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             // entirely (45k letters) 10x/s — the main thread saturated and the highlight
             // looked stuck.
             let seg = local[found]
-            let word = wordIndex(in: seg.words, at: seconds)
+            var word = wordIndex(in: seg.words, at: seconds)
+            // Timed word stalled while the sentence continues: creep forward
+            // instead of freezing (expansions exhaust the timed words).
+            nudgedNow = false
+            if word == nudgeWord, seg.index == nudgeSeg, word >= 0, word + 1 < seg.words.count,
+               seconds - nudgeSince >= 0.9 {
+                word += 1
+                nudgeWord = word
+                nudgeSince = seconds
+                nudgedNow = true
+            } else if word != nudgeWord || seg.index != nudgeSeg {
+                nudgeSeg = seg.index
+                nudgeWord = word
+                nudgeSince = seconds
+            }
+            let global = nextIndex < chunkOffsets.count ? chunkOffsets[nextIndex] + seconds : seconds
+            lagProbe(audioTime: global, chunk: nextIndex, seg: seg.index, word: word)
             if seg.text != currentSegmentText { currentSegmentText = seg.text }
             if seg.index != currentSegmentIndex { currentSegmentIndex = seg.index }
             if seg.page != currentSegmentPage { currentSegmentPage = seg.page }
