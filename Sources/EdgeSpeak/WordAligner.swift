@@ -181,6 +181,17 @@ final class WordAligner {
         mapping = align(spokenWords: spokenWords, pdf: pdf)
     }
 
+    /// Drops the saved alignment: the cache key (sentence + counts) repeats
+    /// across documents, so opening a new PDF with the same counts reused the
+    /// old document's boxes and the PDF yellow drifted. Called when the
+    /// displayed text identity changes (document or text mode).
+    func invalidate() {
+        currentSentence = -1
+        mapping = []
+        spokenCount = -1
+        boxCount = -1
+    }
+
     /// Box of word `target` of sentence `sentence`, aligning once and reusing
     /// while it is the same sentence. Called on every highlight tick (10 Hz): the
     /// alignment is O(n·m) and cannot run on every frame.

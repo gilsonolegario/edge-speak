@@ -52,11 +52,15 @@ struct ClickableTextView: NSViewRepresentable {
 
         func bind(controller: SpeechController, textView: ClickReportingTextView,
                   context: (() -> (full: String, entry: Range<String.Index>)?)?, pointSize: CGFloat) {
-            guard wordCancellable == nil else { return }
+            // Rebind on every update: `makeNSView` runs once and captured the first
+            // document's closure. Switching files kept the old text for locating
+            // the word, so the panel yellow landed wrong from the 2nd sentence on.
+            // Only the sink is created once.
             self.box = textView
             self.controller = controller
             self.context = context
             self.pointSize = pointSize
+            guard wordCancellable == nil else { return }
             wordCancellable = controller.$highlightWordIndex
                 .receive(on: RunLoop.main)
                 .sink { [weak self] _ in self?.paintWord() }
@@ -251,6 +255,13 @@ struct ClickableTextView: NSViewRepresentable {
         // once and captured the first `body`'s `onTap`. When switching files,
         // the old closure mapped the new document's clicks against the old text
         // (finding B5). Reassigning keeps `onTap` always the current document's.
+        // Same for the word-locating closure: the coordinator kept the first
+        // document's text and the panel yellow drifted from the 2nd sentence on.
+        if let controller {
+            context.coordinator.bind(
+                controller: controller, textView: textView,
+                context: sentenceContext, pointSize: pointSize)
+        }
         textView.onCharacterTap = { [weak textView] index in
             guard index >= 0, let textView else { return }
             onTap(index)

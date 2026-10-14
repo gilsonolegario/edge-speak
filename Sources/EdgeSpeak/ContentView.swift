@@ -449,6 +449,10 @@ struct ContentView: View {
                 if busy { revealStatus() } else { showStatusBriefly() }
             }
             .onChange(of: integralMode) { _, _ in handleIntegralModeChange() }
+            // Displayed text identity changed (document or text mode): the
+            // per-sentence word→box cache key repeats across documents, so drop
+            // it here or the PDF yellow reuses the old document's boxes.
+            .onChange(of: attrGeneration) { _, _ in wordAligner.invalidate() }
             // Any advance of the highlight releases the transitory brake and the view
             // resumes following.
             .onChange(of: controller.highlightIndex) { _, _ in scrollHold = false }

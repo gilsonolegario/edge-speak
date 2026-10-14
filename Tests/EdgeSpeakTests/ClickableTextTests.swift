@@ -95,3 +95,26 @@ struct ClickablePaintTests {
         #expect(font?.pointSize == 13)
     }
 }
+
+/// Rebinding on document switch: the second `bind` replaces the word-locating
+/// closure. Before, the guard kept the first document's text and the panel
+/// yellow drifted from the 2nd sentence on.
+@MainActor
+struct CoordinatorBindTests {
+    @Test func secondBindReplacesContext() {
+        let controller = SpeechController()
+        let view = ClickReportingTextView()
+        let coordinator = ClickableTextView.Coordinator()
+        let doc1 = "doc one text"
+        let doc2 = "doc two text"
+        coordinator.bind(
+            controller: controller, textView: view,
+            context: { (doc1, doc1.startIndex..<doc1.endIndex) }, pointSize: 13)
+        #expect(coordinator.context?()?.full == doc1)
+        coordinator.bind(
+            controller: controller, textView: view,
+            context: { (doc2, doc2.startIndex..<doc2.endIndex) }, pointSize: 15)
+        #expect(coordinator.context?()?.full == doc2)
+        #expect(coordinator.pointSize == 15)
+    }
+}

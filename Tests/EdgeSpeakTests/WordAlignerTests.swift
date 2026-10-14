@@ -173,4 +173,29 @@ struct WordAlignerTests {
         #expect(WordAligner.normalized("(") == "")
         #expect(WordAligner.normalized("1944") == "1944")
     }
+
+    /// New document with the same sentence index and counts: without dropping
+    /// the cache the old map returns (stale); `invalidate` restores the fresh one.
+    @Test func documentSwitchInvalidatesCache() {
+        let aligner = WordAligner()
+        func box(_ text: String, _ x: CGFloat) -> WordAligner.Box {
+            WordAligner.Box(text: text, rect: CGRect(x: x, y: 0, width: 8, height: 10))
+        }
+        let first = aligner.box(
+            sentence: 5, target: 1, spokenWords: ["a", "b"],
+            pdf: [box("a", 0), box("b", 10)])
+        #expect(first?.origin.x == 10)
+        // Same key (sentence + counts), other document with another map:
+        // "q" has no box, "a" goes to box 0 — reusing the old [0,1] map
+        // would point target 1 at box 1 (x=110) instead of box 0 (x=100).
+        let stale = aligner.box(
+            sentence: 5, target: 1, spokenWords: ["q", "a"],
+            pdf: [box("a", 100), box("b", 110)])
+        #expect(stale?.origin.x == 110)
+        aligner.invalidate()
+        let fresh = aligner.box(
+            sentence: 5, target: 1, spokenWords: ["q", "a"],
+            pdf: [box("a", 100), box("b", 110)])
+        #expect(fresh?.origin.x == 100)
+    }
 }
