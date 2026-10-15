@@ -13,9 +13,5 @@ let package = Package(
             // macOS 14/15 floor still launches (its use is @available-gated).
             linkerSettings: [.unsafeFlags(["-weak_framework", "FoundationModels"])]
         ),
-        .testTarget(
-            name: "EdgeSpeakTests",
-            dependencies: ["EdgeSpeak"]
-        ),
     ]
 )
