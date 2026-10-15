@@ -1,13 +1,13 @@
 # EdgeSpeak — interface contract
 
-State: 2026-10-13. A PDF/text reader with aloud reading in
+State: 2026-10-15. A PDF/text reader with aloud reading in
 **streaming**: each synthesized slice plays as soon as it is ready.
 Two engines: edge-tts online (Microsoft neural voices, returns
 per-word timings) and Piper offline (one WAV per sentence, no word
-timings). Tests: **133 `@Test` functions in 18 files**, counted
-from the source tree on 2026-10-13 (`swift test` is the runner;
-the green/red state is not asserted here — it was not run for this
-document).
+timings). No automated test suite: it was removed by owner decision on
+2026-10-15 (backup kept outside the repo). Verification is `swift build`
+plus the live app — the green/red state of behavior is asserted by live
+runs, recorded in BACKLOG.md, not here.
 
 UI: **toolbar at the top** (Open, Voice,
 Options) + content + **floating control bar at the bottom, always
@@ -15,8 +15,7 @@ visible**.
 
 - Language: Swift / SwiftUI, platform macOS 14+. SwiftPM package
   (Swift 6 tools, language mode v5), target `EdgeSpeak`, sources in
-  `Sources/EdgeSpeak/` (20 files), tests in `Tests/EdgeSpeakTests/`
-  (18 files, swift-testing: `@Test`/`#expect`, not XCTest).
+  `Sources/EdgeSpeak/` (24 files). No `Tests/` directory exists.
 - **Architecture decision:** the engines stay internal
   (`StreamingPlayer` + `EdgeTTS`/`PiperTTS`). `edge-playback`/mpv
   was discarded because it returns neither per-word timings nor
@@ -24,18 +23,12 @@ visible**.
   the on-disk cache and the offline voice.
 - Process: the orchestrator defines the boundary contracts between
   files; implementation runs in subagents with disjoint scopes;
-  integration is verified with `swift build`, `swift test` and a
+  integration is verified with `swift build` and a
   relaunch of the app.
-- Research context (cited, not copied): the verbalization rules
-  follow the survey in `docs/pesquisas/logica-leitura.md`
-  (forallx Calgary, SEP, MathSpeak/ClearSpeak/SRE, PT-BR manuals —
-  UFS/UFR/UFSC) with a status seal per rule ([P]/[S]/[I]/[?]); the
-  OSS map and licenses are in `docs/pesquisas/oss-mapa.md`; the
-  parallel UI and threading audit findings live in
-  `docs/pesquisas/auditoria-20261013.md` (word in the panel in
-  yellow, Play resumes with synthesis in flight, `store` off the
-  main actor, pending jump cleared on error, drag that does not
-  trigger a jump — all incorporated in the sections below).
+- Research context: the survey notes, OSS map and audit findings were
+  removed with `docs/` on 2026-10-15. What was incorporated into the code
+  stays described in the sections below; the removed notes are not
+  recoverable from this document.
 
 ---
 
@@ -268,10 +261,10 @@ to the next synthesis anyway).
 
 ## 2) Feature → code map
 
-Synced with `docs/pesquisas/mapa-funcionalidades.md`. Line-precise
-references live in that map; symbol names here are verified against
-the source tree and are the stable reference. Test names are the
-declared `@Test` functions.
+Symbol names here are verified against
+the source tree and are the stable reference. The feature→code map
+that lived in `docs/` was removed on 2026-10-15; no test names appear
+below — the suite was removed the same day.
 
 1. **Yellow per word, never jumping back** — implementation:
    `StreamingPlayer` (0.1 s timer + `updateHighlight`,
@@ -279,9 +272,8 @@ declared `@Test` functions.
    (`highlightWordIndex`); view: `ContentView` (online karaoke,
    bold + strong background); alignment: `WordAligner`
    (Needleman–Wunsch, the current phrase never moves back).
-   Tests: `WordAlignerTests` (`expansoesNaoRoubanCaixa`,
-   `repetidaComVizinhasDiferentes`, …). **Gap:** no automated test
-   for the timer/UI — visual regression is manual.
+   Formerly locked by `WordAlignerTests` (suite removed 2026-10-15).
+   **Gap:** visual regression is manual.
 2. **Blue per sentence** — implementation: `PDFDocumentView` (one
    `.highlight` annotation per box); text: `ContentView`
    (`highlightIndex` → range, accent color α 0.35); emitted by
@@ -292,9 +284,9 @@ declared `@Test` functions.
    `ContentView` (`followReading` master persisted, `scrollHold` brake set on
    `onUserScroll`, released on highlight advance/click/`goToPassage`; the button
    appears with master on + brake, `revealToken` jumps to the passage);
-   catalog: `L10n` (`ui.goToPassage`). Tests:
-   `PDFFollowTests` (`userScrollDetected`, `programmaticScrollNotDetected`, …) cover
-   the pure `isUserScroll` decision, not the flag.
+    catalog: `L10n` (`ui.goToPassage`). Formerly `PDFFollowTests`
+    covered the pure `isUserScroll` decision (suite removed 2026-10-15),
+    not the flag.
 4. **Click plays from the sentence (even with no audio)** —
    implementation: text panel `ContentView` (`onTap` charIndex →
    entry; `clickToPlay`: `revealToken` + `jumpToSegment`, or play
@@ -303,45 +295,43 @@ declared `@Test` functions.
    `PhraseLocator`; pending jump: `SpeechController`
    (`pendingJumpIndex`, `jumpToSegment`, `retryPendingJump`);
    player: `StreamingPlayer` (`seek(toSegment:)`, `jumpToSegment`).
-   Tests: `PdfClickLocatorTests` (`contencaoVence`, …),
-   `StreamingProofTests` (`saltoPorFraseSemDuracoes`).
+    Formerly `PdfClickLocatorTests` + `StreamingProofTests`
+    (suites removed 2026-10-15).
 5. **Direct jump to the slice** — implementation:
    `StreamingPlayer` (`seek(toSegment:)`: the chunk containing the
    sentence + local `seg.start`; global `seek` for the bar; shared
    `gotoChunk`); controller: `SpeechController` (`seek(toSegmentAt:)`,
-   `seek(to:)`). Tests: `StreamingProofTests` (`saltoPorFraseSemDuracoes`).
+   `seek(to:)`). Formerly `StreamingProofTests`
+    (suite removed 2026-10-15).
 6. **Discard transcription + Generate new reading** —
    implementation: `SpeechController` (`hasTranscription`,
    `discardTranscription`: clears key/audio/segments/highlights +
    `DiskCache.remove`, `cancelSynthesis`); UI: `ContentView`
    (discard, `handleIntegralModeChange`); catalog: `L10n`
-   (`status.transcriptionDiscarded`, `ui.newReading`). Tests:
-   `TranscriptionResetTests` (`modosGeramTextosEChavesDiferentes`,
-   `removerApagaDoCache`).
+   (`status.transcriptionDiscarded`, `ui.newReading`). Formerly
+    `TranscriptionResetTests` (suite removed 2026-10-15).
 7. **Persisted voice, Settings, PT/EN translation** — implementation:
    keys in `AppSettings` (`voiceKey`, `rateKey`, `followKey`,
    `integralKey`, `footnoteKey`, `fontKey`); UI: `ContentView`
    (`@AppStorage` for voice/rate/language); Settings:
    `SettingsView` (offline voices, rate choices, footnotes toggle);
-   catalog: `L10n` (`resolve` + fallback, pt/en tables). Tests:
-   `L10nResolverTests`, `L10nCompletenessTests`.
+   catalog: `L10n` (`resolve` + fallback, pt/en tables). Formerly
+    `L10nResolverTests` + `L10nCompletenessTests` (suites removed
+    2026-10-15).
 8. **Formulas spelled out with pauses** — implementation:
    `ReadAloudFilter` (`forSpeech`, `expandLogic`, `resolveHorseshoe`,
    `expandSetBuilder`, `expandAbbreviations`, `spellOutYears`,
-   `numeroPorExtenso`, the formula-line rule). Tests:
-   `ReadAloudFilterTests` (`simbolosExistentes`,
-   `falaNaoAlteraExibicao`, …). **Gap:** no real formula PDF
-   measured (declared in the suite header) — the pure function is
-   covered; how extraction delivers a symbol (entity, LaTeX, image)
-   is unknown.
+   `numeroPorExtenso`, the formula-line rule). Formerly
+    `ReadAloudFilterTests` (suite removed 2026-10-15). **Gap:** no
+    measured formula PDF — how extraction delivers a symbol (entity,
+    LaTeX, image) is unknown.
 9. **Footnotes (marker + body + option)** — implementation: linking
    in `TextImport` (`resolveFootnotes`, `marcaAnterior`, use in
    `makePhrases`); announcement in `ReadAloudFilter`
    (`expandFootnoteMarkers` via `forSpeech`) with the mold in `L10n`
    (`speech.footnote`); option: `AppSettings` (`footnoteKey`,
-   default true), `ContentView`, `SettingsView`. Tests:
-   `FootnoteTests` (`corpoVaiParaAposOMarcador`,
-   `notaDeFimLigaAtras`, …).
+   default true), `ContentView`, `SettingsView`. Formerly
+    `FootnoteTests` (suite removed 2026-10-15).
 10. **Online/offline engines, cache, venv** — online: `EdgeTTS`
     (`buildChunks` — first slice short, cut retreats to paragraph
     end; `mapSegments`; streaming in order via `OrderedPublisher`;
@@ -350,10 +340,11 @@ declared `@Test` functions.
     at a time); cache: `DiskCache` (`key`, `lookup`, `store`,
     `remove`); venv: `BundledEnv` (`readyPython`, `ensure`,
     `pickPython`); scripts: `Tools/synth_timing.py`,
-    `Tools/piper_synth.py`, `Tools/pdf_extract.py`. Tests:
-    `BundledEnvTests` (`validSupportWins`, `voiceNames`),
-    `EdgeTTSChunkTests`, `EngineProtectionTests`. **Gap:** no
-    end-to-end test of the cache join/eviction or of Piper offline.
+    `Tools/synth_timing.py`,
+    `Tools/piper_synth.py`, `Tools/pdf_extract.py`. Formerly
+    `BundledEnvTests` + `EdgeTTSChunkTests` + `EngineProtectionTests`
+    (suites removed 2026-10-15). **Gap:** no end-to-end verification
+    of the cache join/eviction or of Piper offline.
 
 ---
 
@@ -840,8 +831,7 @@ expands notation; `clean` never inserts a spoken word.
   the motor reads them alone) → `expandLogic` → `expandFootnoteMarkers`
   (announces the glued marker, unless `readFootnotes == false`) → collapse
   of duplicate spaces/commas.
-- **Verbalization decisions (based on the survey in
-  `docs/pesquisas/logica-leitura.md`):**
+- **Verbalization decisions (survey notes removed 2026-10-15):**
   - Quantifiers with a variable and a prosodic comma ("para todo
     x,"), modals □ ◇, turnstiles ⊢ ⊨ with a short pause before and
     after, negations ⊬ ⊭, ASCII `|-` `|=` `->` `=>` `<->`.
@@ -1207,116 +1197,15 @@ the 4 pt click-vs-drag threshold in both clickable views.
     (rebuilding 45k letters 10×/s saturates the main actor), and the
     attributed string is cached by (sentence, word) during a reading.
 
-## 6) Tests (`Tests/EdgeSpeakTests/`)
+## 6) Automated tests — removed
 
-18 files, 133 `@Test` functions (counted in the source tree on
-2026-10-14). swift-testing (`@Test`/`#expect`), not XCTest. Per-file
-counts: `BundledEnvTests` 8 · `DiskCacheTests` 1 · `EdgeTTSChunkTests`
-6 · `EngineProtectionTests` 2 · `FootnoteTests` 28 · `HonestTrackTests` 2 ·
-`L10nCompletenessTests` 5 · `L10nResolverTests` 8 · `PDFFollowTests` 5 ·
-`PdfClickLocatorTests` 3 · `ReadAloudFilterTests` 33 · `ResumeTests` 3 ·
-`StatusMirrorTests` 1 · `StreamingPlayerStarvedSeekTests` 1 ·
-`StreamingProofTests` 6 · `TextImportTests` 7 · `TranscriptionResetTests`
-3 · `WordAlignerTests` 11.
-
-What each suite locks:
-
-- `ReadAloudFilterTests` (34) — `forSpeech` by symbol and language
-  (exact EN+PT text: quantifiers, modals, turnstiles, sets, Greek,
-  iota, Quine corners, primes, ASCII comparisons, ⊤/⊥ in Portuguese,
-  set-builder, horseshoe by context), non-regression of ordinary prose
-  ("3 x 4", dates, "movem-se"), the speech-does-not-alter-display
-  contract, and the glued footnote marker (announces, does not bite
-  years/decimals/figures). Declared pending: PDF extraction can
-  deliver symbols another way (entity, LaTeX, image); without a
-  measured formula PDF, the tests cover the pure function.
-- `WordAlignerTests` (11) — expansions do not steal a box
-  (`expansoesNaoRoubanCaixa`), repeated words with different
-  neighbors go each to their own occurrence (`repetidaComVizinhasDiferentes`),
-  a repeated "the" does not shift (`theRepetidoNaoDesloca`), a PDF
-  symbol not spoken (`pdfComSimboloNaoFalado`), a repeated "the" in
-  the article stays in its own phrase
-  (`theRepetidoNoArtigoFicaNaPropriaOcorrencia`), the next phrase
-  matches at its own occurrence (`fraseSeguinteCasaNaPropriaOcorrencia`),
-  an expansion before a repeated word does not steal a box
-  (`expansaoAntesDeRepetidaNaoRoubaCaixa`), the box of the target
-  (`caixaDoAlvo`), a repeated tick does not change the box
-  (`repetirTiqueNaoMudaACaixa`), changing the phrase recomputes
-  (`trocaDeFraseRecalcula`), normalization (`normalizacao`).
-- `BundledEnvTests` (8) — the Python probe order, the Piper voice
-  names, site-packages in a fake venv and the idempotent edge-tts
-  patch (`suporteValidoVence`, `nomesDeVoz`): the v2 endpoint
-  enters, the language-immune parse enters, a second pass does not
-  change a byte, a missing package fails legibly.
-- `L10nResolverTests` (8) — PT default, EN when the key exists,
-  positional interpolation (one and several args), fallback to PT, an
-  unknown key returns the key, an extra argument does not break, the
-  language key/default.
-- `FootnoteTests` (28) — the body goes after the marker (same page)
-  (`corpoVaiParaAposOMarcador`), an endnote links to the nearest
-  previous marker (`notaDeFimLigaAtras`), a loose number falls only
-  with a page, without a marker it neither moves nor strips the
-  number, indices preserved, the option off silences the marker, the
-  option on announces in both languages, the default reads notes.
-- `PDFFollowTests` (5) — the user-scroll detector: programmatic
-  scrolling, zoom and resizing do not turn follow off
-  (`rolagemDoUsuarioDesliga`); a visible word does not scroll.
-- `StreamingProofTests` (6) — a jump by sentence WITHOUT measured
-  durations (synthetic WAVs with zero offsets: it goes straight to
-  chunk 1) (`saltoPorFraseSemDuracoes`), in-order delivery under
-  out-of-order arrival (`OrderedPublisher`), a bad chunk does not
-  stall (`isStarved`, not `isFinished`), `play()` resumes with the
-  queue emptied, word timings reach the UI (`mapSegments` preserves
-  words and global indices).
-- `L10nCompletenessTests` (5) — the same keys in both languages, no
-  empty text, `{n}` markers with the same arity, no `\(` in the
-  catalog, a sample of phase-2 keys exists in both.
-- `PdfClickLocatorTests` (3) — containment wins (`contencaoVence`),
-  proximity up to 40 pt, the margin returns nil (and a phrase without
-  rects is ignored).
-- `TranscriptionResetTests` (3) — full/filtered modes generate
-  different texts and cache keys (`modesProduceDifferentTextsAndKeys`),
-  `DiskCache.remove` deletes from the cache (`removeClearsFromCache`),
-  `discardTranscription` clears the state.
-- `TextImportTests` (7) — hyphenation in the sentence→boxes match
-  (the joined one matches, the middle one does not join, a ligature),
-  a sentence at a page break splits into two passages (without a
-  break, a single one), and a reserve without boxes falls back to the
-  segment.
-- `DiskCacheTests` (1) — `clearAll(preserving:)` deletes the other
-  entries while preserving the key in use, `remove` deletes, and
-  `totalBytes` answers.
-- `EdgeTTSChunkTests` (6) — slicing: with an overflow in the middle
-  of the next paragraph, the cut retreats to the previous paragraph
-  end instead of splitting the thought (`sliceCutsAtParagraphEnd`),
-  the short first slice is preserved (`firstSliceKeptShort`), a
-  giant paragraph still splits without losing a sentence, and the
-  final-silence trim (ffmpeg trims the tail only when it saves more
-  than 2 KB; timings intact).
-- `EngineProtectionTests` (2) — cross-engine protection (M4) and
-  duration with an extra chunk (B3): a WAV with a `LIST` chunk
-  between `fmt` and `data` — the measured duration must ignore the
-  extra chunk.
-- `ResumeTests` (3) — per-document resume: round-trip against an
-  ephemeral UserDefaults suite (another document/voice does not
-  inherit), positions below 3 s are not saved, the coverage guard
-  (no saved point, no audio, or a point beyond the measured duration
-  means no resume), and clear forgets.
-- `StatusMirrorTests` (1) — the state-mirror proof (finding B1): a
-  transient status message survives the streamer's `objectWillChange`
-  ticks — the mirror republishes only when the effective state
-  changes. Headless, no audio, no network.
-- `StreamingPlayerStarvedSeekTests` (1) — regression of audit finding
-  M1: jumping to a sentence of ANOTHER chunk with the queue emptied
-  (`isStarved`, synthesis in course) started the audio in `playChunk`
-  and then the `else` of `gotoChunk` rewrote `isPlaying=false;
-  isPaused=true`, and the following `play()` was a no-op (the UI
-  showed "paused" with sound) — the declared state must match the
-  audio in playback.
-- `HonestTrackTests` (2) — the track follows the played position
-  (`currentGlobalTime`), not a stale snapshot: silence WAVs really play
-  headless and the wall clock anchors the proof; at the end it marks the
-  measured audio end instead of freezing on the last karaoke snapshot.
+No test suite exists. It was removed by owner decision on 2026-10-15
+(179 tests in 27 suites at removal; backup kept outside the repo) together
+with the `EdgeSpeakTests` target in `Package.swift`, so `swift test`
+reports no tests. Behavior once locked here — pre-buffer release, jump
+without replay, highlight timer reinstall, page-own word box, panel
+context rebind, whole-word citation matching — is now verified only by
+`swift build` plus live runs in the app, recorded in BACKLOG.md.
 
 ---
 
@@ -1346,16 +1235,18 @@ What each suite locks:
   therefore, no highlight. Fixed by `releasePrebufferIfReady()` (called by
   `enqueue`, `finishProbe`, `markSynthesisComplete`); `playChunk` now also
   positions the highlight immediately instead of waiting the first 10 Hz tick.
-  Regression: `StreamingProofTests.prebufferReleasesWhenProbeLands`.
+   Former regression: `prebufferReleasesWhenProbeLands` (suite removed
+   2026-10-15).
 - **Repetition of the first sentence: RESOLVED.** A jump (click or
   resume-by-document) made during the pre-buffer was undone by the release,
   which played slice 0 from zero — the sentence was heard twice. `gotoChunk`
   now spends the hold (`startPending`/`isBuffering`) and reinstalls the
-  highlight timer, so the release cannot fire on top of the jump. Regression:
-  `StreamingProofTests.clickDuringBufferKeepsOffsetOnRelease`.
+   Former regression: `clickDuringBufferKeepsOffsetOnRelease` (suite
+   removed 2026-10-15).
 - **Footnote bodies in PDFs whose text layer does not carry them**
   (like the test article): the marker↔body pipeline is ready and
-  covered by `FootnoteTests` with synthetic lists, but it depends on
+   covered with synthetic lists (former `FootnoteTests`, suite removed
+   2026-10-15),
   what the extractor finds; without a body in the PDF, only the
   marker is announced. Marker detection is two-layered: geometric
   `sup` from the extractor (span-level, MuPDF bit or small+elevated
@@ -1365,11 +1256,11 @@ What each suite locks:
   Known gap: `temSup` requires the token core to equal N, so glued
   tokens (`realist's.1`) fall through to the reserve; suffix matching
   is the recorded next step.
-- `ReadAloudFilterTests` declares its own pending item: PDF extraction
+- Open item: PDF extraction
   can deliver logic symbols another way (entity, LaTeX, image);
-  without a measured formula PDF, the tests cover the pure function.
-- Improvement paths researched, without integration (see
-  `docs/pesquisas/oss-mapa.md`): Montreal Forced Aligner (MIT) for
+  without a measured formula PDF this path is unverified.
+- Improvement paths researched, without integration (notes removed
+  2026-10-15): Montreal Forced Aligner (MIT) for
   offline karaoke with Piper; AVAudioPlayerNode (native) for gapless
   concatenation without a duration probe; pdfminer.six (MIT) as a
   fallback plan if the PyMuPDF AGPL becomes blocking when opening the

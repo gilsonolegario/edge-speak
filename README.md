@@ -21,7 +21,7 @@ speech begins quickly. Native SwiftUI, macOS 14+.
 Grab the latest pre-built app from the [Releases page](https://github.com/gilsonolegario/edge-speak) — or build it locally:
 
 ```bash
-./build-app.sh    # macOS 14+ → EdgeSpeak.app (~130 MB, zip ~112 MB — measured 2026-10-13, see docs/tamanho-bundle.md)
+./build-app.sh    # macOS 14+ → EdgeSpeak.app (~130 MB, measured 2026-10-14)
 ```
 
 or run straight from the source tree (development mode; the bundled Python base
@@ -90,8 +90,8 @@ Two engines in the same transport; switch from the toolbar selector or Settings 
 
 ## Reading and highlighting
 
-- **Blue per sentence**: one highlight annotation per line box of the sentence — never the paragraph. Boxes come from the extractor in reading order, falling back to the paragraph when the sentence does not match.
-- **Yellow per word** (online only): a global alignment between the spoken sequence and the PDF sequence. Where the PDF has a symbol and the voice has a phrase ("∃uT (u,o)" → "there exists u, such that, T of u"), the expansion word gets **no box** instead of stealing a later prose box — that is what used to make the yellow jump side to side. Repeated words resolve by context (±3), not by the first occurrence.
+- **Blue per sentence**: one highlight annotation per line box of the sentence — never the paragraph. Boxes come from the extractor in reading order, falling back to the paragraph when the sentence does not match. The word highlight is drawn on the page that owns the word's box, which is not always the page where its sentence starts.
+- **Yellow per word** (online only): a global alignment between the spoken sequence and the PDF sequence. Where the PDF has a symbol and the voice has a phrase ("∃uT (u,o)" → "there exists u, such that, T of u"), the expansion word gets **no box** instead of stealing a later prose box. In the text panel the spoken word matches by whole word only, so expansions of years and citations ("Carnap 1950" → "Carnap mil novecentos e cinquenta") miss cleanly instead of dragging the highlight forward. Repeated words resolve by context (±3), not by the first occurrence.
 - **Scrolling**: automatic follow can be turned off. A manual scroll only holds the follow for the moment — any highlight advance releases it and the view resumes following, and the follow setting keeps its value. The **Go to the passage** button returns to the reading point. Clicking a sentence **plays from it**: with no audio yet, synthesis starts at the clicked sentence; with audio, the jump goes straight to the slice, without waiting for timings not yet measured.
 - **Footnotes** (on by default): the glued marker ("argument.7") is announced ("footnote 7") and the body is read right after — the importer moves it to after the marker's sentence without changing the other sentences' indices. When the PDF omits the superscript bit, a horizontal ruler (the note zone) also marks the markers. Honest limit: in a PDF whose text layer does not carry the note body, only the marker is announced.
 
@@ -148,18 +148,19 @@ Everything persists between sessions. The interface is available in Portuguese a
 
 ## Architecture
 
-One SwiftPM executable target, `EdgeSpeak`, from `Sources/EdgeSpeak/` (20 files);
-tests in `Tests/EdgeSpeakTests/`. SwiftUI on macOS 14+, with PDFKit and TextKit
-wrapped in `NSViewRepresentable`. Two synthesis engines run as child processes:
-`edge-tts` online (streaming slices with per-word timings) and Piper offline (one
-WAV per sentence, persistent session). `StreamingPlayer` is the single source of
-truth for playback state; `SpeechController` orchestrates the engines and mirrors
-the player. PDF text comes from PyMuPDF (AGPL-3.0, via `Tools/pdf_extract.py` in
-a separate Python process) with a PDFKit fallback, and the reading order is
-rebuilt in Swift by a recursive XY-cut. The spoken text
-(`ReadAloudFilter.forSpeech`) and the displayed text (`clean`) are separate paths
-that never mix. The app packs a Python 3.13 base and wheels, and prepares a venv
-on first run.
+One SwiftPM executable target, `EdgeSpeak`, from `Sources/EdgeSpeak/` (24 files).
+No test target exists: the suite was removed by owner decision on 2026-10-15 and
+verification is `swift build` plus the live app. SwiftUI on macOS 14+, with
+PDFKit and TextKit wrapped in `NSViewRepresentable`. Two synthesis engines run
+as child processes: `edge-tts` online (streaming slices with per-word timings)
+and Piper offline (one WAV per sentence, persistent session). `StreamingPlayer`
+is the single source of truth for playback state; `SpeechController`
+orchestrates the engines and mirrors the player. PDF text comes from PyMuPDF
+(AGPL-3.0, via `Tools/pdf_extract.py` in a separate Python process) with a
+PDFKit fallback, and the reading order is rebuilt in Swift by a recursive
+XY-cut. The spoken text (`ReadAloudFilter.forSpeech`) and the displayed text
+(`clean`) are separate paths that never mix. The app packs a Python 3.13 base
+and wheels, and prepares a venv on first run.
 
 ## Build
 
@@ -168,9 +169,10 @@ only — `uv` with a Python 3.13.
 
 ```bash
 swift build
-swift test        # 133 tests in 18 suites (swift-testing, @Test/#expect)
 ./build-app.sh   # → EdgeSpeak.app (~130 MB) at the project root
 ```
+
+There is no test suite: `swift test` reports no tests since 2026-10-15.
 
 `build-app.sh` downloads the Python base, the wheels and the Piper wheel **at
 build time** and packs the `.app` with everything inside (details in the script
@@ -183,23 +185,29 @@ and nothing runs in the background.
 
 - **Layer-by-layer contract** (files, functions and rules) — [INTERFACE.md](INTERFACE.md)
 - **Third-party credits and licenses** — [CREDITS.md](CREDITS.md)
-- **Research notes** (PyMuPDF, PDF types, OSS survey, audits) — [docs/pesquisas/](docs/pesquisas/)
 
 ## History
 
-**0.1.2** — Footnotes land right: the marker only counts when its digits are in its own sentence (no more early body plus a repeated announcement), citations unwrap with their content kept behind a toggle, and "et al." survives the cleanup. Playback pre-buffers three slices before the first sound, then runs without stalling. Interface phase 1: player with elapsed/total time, fixed timer/voice/resume signals, a document header over the PDF and VoiceOver labels across the transport and Settings. New local engines (offline summary, scanned-page OCR, dictionary lookup, media keys), wired up as the UI lanes land.
+**main após 0.1.2** — repetição da primeira leitura eliminada (o salto gasta a
+espera do pré-buffer), destaque que acompanha desde a abertura (liberação na
+sonda de duração, timer reinstalado, posicionamento imediato), amarelo na
+página da própria caixa, contexto do painel religado na troca de documento e
+casamento por palavra inteira em citações. Suite e diretório de pesquisa
+removidos por decisão do dono.
 
-**0.1.1** — Robustness and comfort release. The reading highlight now crosses page turns without losing the follow (a manual scroll holds it only for the moment, then the highlight re-takes it); footnote markers resolve end to end and a formula line no longer swallows prose that merely mentions a symbol; hyphen joins prefer in-document evidence before the system dictionary. Note markers are also caught by overline geometry when the PDF omits the superscript bit. Engine hardening: the online engine protects the offline directory from its own purge, WAV duration no longer assumes a fixed 44-byte header, and the Edge runner no longer holds a cooperative thread while it waits. The progress bar reads the real playback position instead of a 10 Hz stale snapshot. New: a sleep timer (Options menu) and a copyable diagnostic report (Settings → Advanced).
+**0.1.2** — Footnotes land right: the marker only counts when its digits are in its own sentence (no more early body plus a repeated announcement), citations unwrap with their content kept behind a toggle, and "et al." survives the cleanup. Playback pre-buffers three slices before the first sound, then runs without stalling.
+
+**0.1.1** — Robustness and comfort release. The reading highlight now crosses page turns without losing the follow (a manual scroll holds it only for the moment, then the highlight re-takes it); footnote markers resolve end to end and a formula line no longer swallows prose that merely mentions a symbol; hyphen joins prefer in-document evidence before the system dictionary. Note markers are also caught by overline geometry when the PDF omits the superscript bit. The progress bar reads the real playback position instead of a 10 Hz stale snapshot. New: a sleep timer (Options menu) and a copyable diagnostic report (Settings → Advanced).
 
 **0.1.0** — First release: streaming synthesis with sentence and word highlighting, click-to-read from a sentence, footnote markers announced with the body linked right after, logic-formula expansion, PT/EN interface, three-tab Settings, audio export and per-document resume.
 
 ## Known limits
 
-- The first seconds of audio may play without a highlight in the PDF — cause not yet isolated (the slice arrives and plays before the highlight settles; reproducible but not explained).
-- Footnote bodies in PDFs whose text layer does not carry them (such as the test article): the marker is announced, the body does not exist to be read.
+- Footnote bodies in PDFs whose text layer does not carry them: the marker is announced, the body does not exist to be read.
 - A logic symbol that arrives as an image is not read; formula quality depends on the PDF text layer.
 - The online voice depends on the Microsoft endpoint; an outage shows up as a message, not a freeze.
 - Offline voices need the network once (the ~63 MB download); after that, reading is fully local.
+- Quitting before the synthesis reaches 100% leaves no cached audio: reopening synthesizes again from the start.
 
 ## License
 
