@@ -1,0 +1,32 @@
+# Build e artefatos: nada disso vai para o repositório.
+# `.build` e `EdgeSpeak.app` são o produto compilado; `Build/staging` carrega a
+# base do Python, os wheels e as vozes offline (~490 MB) e são baixados pelo
+# build-app.sh — no versionamento só duplicariam o repositório.
+.build/
+Build/
+EdgeSpeak.app/
+EdgeSpeakFusion.app/
+DerivedData/
+.swiftpm/
+
+# Ambiente Python (o venv real fica em ~/Library/Application Support/EdgeSpeak)
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Sessão/rascunhos (nunca versionados por convenção do dono)
+.scratch/
+NOTAS_SESSAO.md
+PROXIMA_SESSAO.md
+*.log
+
+# Editores
+*.xcuserstate
+xcuserdata/
+.idea/
+.vscode/
+.superpowers/
